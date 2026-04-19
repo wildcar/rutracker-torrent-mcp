@@ -75,7 +75,7 @@ class RutrackerClient:
         cookies_path: Path,
         proxy_url: str | None = None,
         session: Any = None,
-        timeout: float = 15.0,
+        timeout: float = 30.0,
     ) -> None:
         self._login = login
         self._password = password
