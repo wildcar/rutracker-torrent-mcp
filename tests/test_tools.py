@@ -1,11 +1,8 @@
-"""Tool-level tests with respx-mocked rutracker."""
+"""Tool-level tests backed by a FakeSession (no real HTTP)."""
 
 from __future__ import annotations
 
 import base64
-
-import httpx
-import respx
 
 from rutracker_torrent_mcp.context import AppContext
 from rutracker_torrent_mcp.tools import (
@@ -14,35 +11,37 @@ from rutracker_torrent_mcp.tools import (
     search_torrents_impl,
 )
 
-BASE = "https://rutracker.org"
+from .conftest import FakeResponse, FakeSession
+
+
+def _tracker(html: str) -> tuple[str, object]:
+    return ("/forum/tracker.php", lambda url, kw: FakeResponse(200, b"", html, {}, url))
 
 
 async def test_search_torrents_ranks_and_limits(
-    app_ctx: AppContext, respx_mock: respx.MockRouter, search_html: str
+    app_ctx: AppContext, fake_session: FakeSession, search_html: str
 ) -> None:
-    respx_mock.get(f"{BASE}/forum/tracker.php").mock(
-        return_value=httpx.Response(200, text=search_html)
+    fake_session.on(
+        "GET", "/forum/tracker.php", lambda url, kw: FakeResponse(200, b"", search_html)
     )
 
     resp = await search_torrents_impl(app_ctx, "Дюна", limit=2)
     assert resp.error is None
     assert len(resp.results) == 2
-    # Fixture order is already seed-desc — the top result should win.
     assert resp.results[0].topic_id == 6126543
     assert resp.results[0].seeders == 1234
     assert resp.results[0].hdr is True
 
 
 async def test_search_torrents_applies_min_seeders(
-    app_ctx: AppContext, respx_mock: respx.MockRouter, search_html: str
+    app_ctx: AppContext, fake_session: FakeSession, search_html: str
 ) -> None:
-    respx_mock.get(f"{BASE}/forum/tracker.php").mock(
-        return_value=httpx.Response(200, text=search_html)
+    fake_session.on(
+        "GET", "/forum/tracker.php", lambda url, kw: FakeResponse(200, b"", search_html)
     )
 
     resp = await search_torrents_impl(app_ctx, "Дюна", min_seeders=100, limit=10)
     ids = {r.topic_id for r in resp.results}
-    # The zero-seeder row in the fixture must be filtered out.
     assert 6300000 not in ids
     assert 6126543 in ids
     assert 6200000 in ids
@@ -55,18 +54,21 @@ async def test_search_torrents_rejects_empty_query(app_ctx: AppContext) -> None:
 
 
 async def test_get_torrent_file_returns_base64(
-    app_ctx: AppContext, respx_mock: respx.MockRouter
+    app_ctx: AppContext, fake_session: FakeSession
 ) -> None:
     content = b"d8:announce30:http://tracker.example/announce"
-    respx_mock.get(f"{BASE}/forum/dl.php").mock(
-        return_value=httpx.Response(
+    fake_session.on(
+        "GET",
+        "/forum/dl.php",
+        lambda url, kw: FakeResponse(
             200,
-            content=content,
-            headers={
+            content,
+            "",
+            {
                 "content-type": "application/x-bittorrent",
                 "content-disposition": 'attachment; filename="[rutracker.org].t42.torrent"',
             },
-        )
+        ),
     )
 
     resp = await get_torrent_file_impl(app_ctx, 42)
@@ -79,26 +81,28 @@ async def test_get_torrent_file_returns_base64(
 
 
 async def test_get_torrent_file_surfaces_captcha(
-    app_ctx: AppContext, respx_mock: respx.MockRouter
+    app_ctx: AppContext, fake_session: FakeSession
 ) -> None:
-    # First call: dl.php serves an HTML page (session expired); the fallback
-    # relogin attempt hits login.php, which responds with a captcha form.
-    respx_mock.get(f"{BASE}/forum/dl.php").mock(
-        return_value=httpx.Response(
-            200,
-            text='<html><body><input name="login_username"><input name="login_password">'
-            '<img src="cap_sid=abc"/></body></html>',
-            headers={"content-type": "text/html"},
-        )
+    # dl.php serves the login page (session expired). Relogin attempt lands
+    # on a captcha form → LoginCaptchaRequired → ToolError(captcha_required).
+    login_html = (
+        '<html><body><input name="login_username"><input name="login_password">'
+        '<img src="cap_sid=abc"/></body></html>'
     )
-    respx_mock.post(f"{BASE}/forum/login.php").mock(
-        return_value=httpx.Response(
-            200,
-            text='<form><input name="cap_code"><input name="cap_sid"></form>',
-        )
+    fake_session.on(
+        "GET",
+        "/forum/dl.php",
+        lambda url, kw: FakeResponse(200, b"", login_html, {"content-type": "text/html"}),
     )
-    # Drop the pre-seeded session to force the relogin branch.
-    app_ctx.rutracker._http.cookies.clear()
+    fake_session.on(
+        "POST",
+        "/forum/login.php",
+        lambda url, kw: FakeResponse(
+            200, b"", '<form><input name="cap_code"><input name="cap_sid"></form>', {}
+        ),
+    )
+    # Drop the pre-seeded session so the relogin path runs.
+    app_ctx.rutracker._session.cookies.clear()
 
     resp = await get_torrent_file_impl(app_ctx, 42)
     assert resp.error is not None
@@ -106,13 +110,13 @@ async def test_get_torrent_file_surfaces_captcha(
 
 
 async def test_get_magnet_link_parses_anchor(
-    app_ctx: AppContext, respx_mock: respx.MockRouter
+    app_ctx: AppContext, fake_session: FakeSession
 ) -> None:
     html = (
         '<html><body><a class="magnet-link" href="magnet:?xt=urn:btih:ABC123">magnet</a>'
         "</body></html>"
     )
-    respx_mock.get(f"{BASE}/forum/viewtopic.php").mock(return_value=httpx.Response(200, text=html))
+    fake_session.on("GET", "/forum/viewtopic.php", lambda url, kw: FakeResponse(200, b"", html))
 
     resp = await get_magnet_link_impl(app_ctx, 42)
     assert resp.error is None
@@ -120,9 +124,9 @@ async def test_get_magnet_link_parses_anchor(
     assert resp.magnet.magnet.startswith("magnet:?xt=urn:btih:ABC123")
 
 
-async def test_get_magnet_link_not_found(app_ctx: AppContext, respx_mock: respx.MockRouter) -> None:
-    respx_mock.get(f"{BASE}/forum/viewtopic.php").mock(
-        return_value=httpx.Response(200, text="<html></html>")
+async def test_get_magnet_link_not_found(app_ctx: AppContext, fake_session: FakeSession) -> None:
+    fake_session.on(
+        "GET", "/forum/viewtopic.php", lambda url, kw: FakeResponse(200, b"", "<html></html>")
     )
 
     resp = await get_magnet_link_impl(app_ctx, 42)
@@ -131,13 +135,17 @@ async def test_get_magnet_link_not_found(app_ctx: AppContext, respx_mock: respx.
 
 
 async def test_search_caches_second_call(
-    app_ctx: AppContext, respx_mock: respx.MockRouter, search_html: str
+    app_ctx: AppContext, fake_session: FakeSession, search_html: str
 ) -> None:
-    respx_mock.get(f"{BASE}/forum/tracker.php").mock(
-        return_value=httpx.Response(200, text=search_html)
-    )
+    calls: list[int] = []
+
+    def handler(url: str, kw: object) -> FakeResponse:
+        calls.append(1)
+        return FakeResponse(200, b"", search_html)
+
+    fake_session.on("GET", "/forum/tracker.php", handler)
 
     await search_torrents_impl(app_ctx, "Дюна")
-    n = len(respx_mock.calls)
+    first = len(calls)
     await search_torrents_impl(app_ctx, "Дюна")
-    assert len(respx_mock.calls) == n
+    assert len(calls) == first  # cache hit, no new network call

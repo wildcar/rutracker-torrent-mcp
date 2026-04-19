@@ -1,26 +1,23 @@
 """rutracker.org client.
 
-No official API — everything is HTML scraping over a cookie session. The
-endpoints we hit:
+No official API — everything is HTML scraping over a cookie session.
+
+Why curl_cffi instead of httpx: rutracker.org sits behind a CDN/WAF that
+fingerprints TLS handshakes. stock httpx (OpenSSL stack) hangs on
+ReadTimeout because the CDN silently drops non-browser fingerprints;
+``curl_cffi`` impersonates a real Chrome handshake and gets through.
+
+Endpoints we hit:
 
 - ``POST /forum/login.php``                — form login.
-- ``GET  /forum/tracker.php?nm=<query>``   — search; returns a table of
-  topics with topic_id / title / forum / size / seeders / leechers /
-  downloads / date.
-- ``GET  /forum/viewtopic.php?t=<id>``     — topic page; used to extract
-  the magnet link and the posted .torrent link.
-- ``GET  /forum/dl.php?t=<id>``            — downloads the .torrent
-  file (requires an authenticated session).
+- ``GET  /forum/tracker.php?nm=<query>``   — search (seeders-desc fixed).
+- ``GET  /forum/viewtopic.php?t=<id>``     — topic page (magnet link).
+- ``GET  /forum/dl.php?t=<id>``            — download .torrent bytes.
 
-The server stores the session cookie on disk (``cookies.json``) so a
-restart doesn't trigger a relogin — rutracker rate-limits login attempts
-and occasionally responds with a captcha to fresh sessions, so reusing a
-good cookie matters.
-
-A structured :class:`LoginCaptchaRequired` is raised when rutracker
-returns the captcha form. The tool layer turns it into a
-``ToolError(code='captcha_required', ...)`` so the caller (the Telegram
-bot, today) can surface a clear instruction to the operator.
+Sessions are persisted to disk so a restart doesn't retrigger a fresh
+login (rate-limited, captcha-prone). Captcha is surfaced as a structured
+``LoginCaptchaRequired`` that the tool layer translates into
+``ToolError(code='captcha_required', ...)``.
 """
 
 from __future__ import annotations
@@ -28,11 +25,11 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-from http.cookies import SimpleCookie
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote
 
-import httpx
+from curl_cffi.requests import AsyncSession
 from selectolax.parser import HTMLParser, Node
 
 
@@ -62,10 +59,11 @@ _DISPO_FILENAME_RE = re.compile(r"filename\*?=(?:UTF-8''|\")?([^\";]+)")
 
 
 class RutrackerClient:
-    """Async rutracker scraper.
+    """Async rutracker scraper backed by curl_cffi.
 
-    Create one instance per process and share it. It owns an ``httpx``
-    client plus a cookie file — both closed by :meth:`aclose`.
+    Pass a pre-built ``AsyncSession`` to inject mocked transports in tests;
+    in production the client creates its own session with Chrome 124
+    impersonation.
     """
 
     def __init__(
@@ -76,39 +74,34 @@ class RutrackerClient:
         base_url: str,
         cookies_path: Path,
         proxy_url: str | None = None,
-        http: httpx.AsyncClient | None = None,
+        session: Any = None,
         timeout: float = 15.0,
     ) -> None:
         self._login = login
         self._password = password
         self._base = base_url.rstrip("/")
         self._cookies_path = cookies_path
-        self._headers = {
-            "User-Agent": (
-                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
-            ),
-            "Accept-Language": "ru,en;q=0.8",
-        }
-        self._http = http or httpx.AsyncClient(
-            base_url=self._base,
-            headers=self._headers,
-            timeout=timeout,
-            proxy=proxy_url,
-            follow_redirects=True,
-        )
-        self._owns_http = http is None
+        self._proxy_url = proxy_url
+        self._timeout = timeout
+        self._session: Any = session
+        self._owns_session = session is None
         self._login_lock = asyncio.Lock()
 
     # ------------------------------------------------------------------
     # lifecycle
     # ------------------------------------------------------------------
     async def open(self) -> None:
+        if self._session is None:
+            kwargs: dict[str, Any] = {"impersonate": "chrome124", "timeout": self._timeout}
+            if self._proxy_url:
+                kwargs["proxy"] = self._proxy_url
+            self._session = AsyncSession(**kwargs)
         self._load_cookies()
 
     async def aclose(self) -> None:
-        if self._owns_http:
-            await self._http.aclose()
+        if self._owns_session and self._session is not None:
+            await self._session.close()
+            self._session = None
 
     # ------------------------------------------------------------------
     # Public API
@@ -133,22 +126,20 @@ class RutrackerClient:
         return rows[:limit]
 
     async def download_torrent(self, topic_id: int) -> tuple[str, bytes]:
-        """Fetch the raw .torrent bytes for ``topic_id``.
-
-        Returns ``(filename, content_bytes)``.
-        """
+        """Fetch the raw .torrent bytes for ``topic_id``."""
         resp = await self._authed_get(
             "/forum/dl.php", params={"t": topic_id}, accept_redirect_to_login=False
         )
-        ctype = resp.headers.get("content-type", "").lower()
-        if "x-bittorrent" not in ctype and not resp.content.startswith(b"d"):
+        ctype = (resp.headers.get("content-type") or "").lower()
+        content = resp.content
+        if "x-bittorrent" not in ctype and not content.startswith(b"d"):
             raise RutrackerError(
                 f"dl.php for topic {topic_id} returned {ctype!r}; probably not authorised"
             )
         filename = _parse_disposition_filename(resp.headers.get("content-disposition", ""))
         if not filename:
             filename = f"[rutracker.org].t{topic_id}.torrent"
-        return filename, resp.content
+        return filename, content
 
     async def magnet_link(self, topic_id: int) -> str | None:
         """Extract the magnet link from the topic page."""
@@ -158,7 +149,6 @@ class RutrackerClient:
             href = node.attributes.get("href")
             if href and href.startswith("magnet:"):
                 return href
-        # Fallback: some skins put the link inside an attribute rather than href.
         m = re.search(r"(magnet:\?xt=urn:btih:[A-Za-z0-9:%&=+\-\.\w]+)", html)
         return m.group(1) if m else None
 
@@ -166,38 +156,48 @@ class RutrackerClient:
     # Session management
     # ------------------------------------------------------------------
     async def ensure_session(self) -> None:
-        """Make sure we have a usable login cookie, logging in if not."""
-        if self._http.cookies.get("bb_session"):
+        if self._has_bb_session():
             return
         async with self._login_lock:
-            if self._http.cookies.get("bb_session"):
+            if self._has_bb_session():
                 return
             await self._do_login()
 
     async def _do_login(self) -> None:
         if not self._login or not self._password:
             raise NotAuthenticated("RUTRACKER_LOGIN / RUTRACKER_PASSWORD are not configured.")
+        if self._session is None:
+            raise RuntimeError("RutrackerClient.open() must be awaited before use.")
         data = {
             "login_username": self._login,
             "login_password": self._password,
-            "login": "\u0412\u0445\u043e\u0434",  # "Вход" — button label value rutracker expects
+            "login": "\u0412\u0445\u043e\u0434",  # "Вход" — rutracker's submit-button value
         }
-        resp = await self._http.post("/forum/login.php", data=data)
-        if _looks_like_captcha(resp.text):
+        resp = await self._session.post(self._base + "/forum/login.php", data=data)
+        body = resp.text
+        if _looks_like_captcha(body):
             raise LoginCaptchaRequired(
                 "rutracker returned a captcha on login; log in manually in a "
                 "browser and drop the bb_session cookie into RUTRACKER_COOKIES_PATH."
             )
-        if not self._http.cookies.get("bb_session"):
+        if not self._has_bb_session():
             raise LoginFailed("rutracker rejected the credentials (no bb_session cookie set).")
         self._save_cookies()
+
+    def _has_bb_session(self) -> bool:
+        if self._session is None:
+            return False
+        for cookie in self._session.cookies.jar:
+            if cookie.name == "bb_session" and cookie.value:
+                return True
+        return False
 
     # ------------------------------------------------------------------
     # HTTP helpers
     # ------------------------------------------------------------------
     async def _authed_get_html(self, path: str, *, params: dict[str, Any] | None = None) -> str:
         resp = await self._authed_get(path, params=params)
-        return resp.text
+        return resp.text  # type: ignore[no-any-return]
 
     async def _authed_get(
         self,
@@ -205,34 +205,40 @@ class RutrackerClient:
         *,
         params: dict[str, Any] | None = None,
         accept_redirect_to_login: bool = True,
-    ) -> httpx.Response:
+    ) -> Any:
         await self.ensure_session()
-        resp = await self._http.get(path, params=params)
-        if _is_login_page(resp) and accept_redirect_to_login:
-            # Cookie expired between persistence and use — relogin once.
-            self._http.cookies.clear()
+        assert self._session is not None
+        url = self._base + path
+        resp = await self._session.get(url, params=params)
+        if accept_redirect_to_login and _is_login_page(resp):
+            # Cookie expired — relogin once.
+            self._session.cookies.clear()
             async with self._login_lock:
                 await self._do_login()
-            resp = await self._http.get(path, params=params)
-        resp.raise_for_status()
+            resp = await self._session.get(url, params=params)
+        if resp.status_code >= 400:
+            raise RutrackerError(f"rutracker {path} → HTTP {resp.status_code}")
         return resp
 
     # ------------------------------------------------------------------
     # Cookie persistence
     # ------------------------------------------------------------------
     def _load_cookies(self) -> None:
-        if not self._cookies_path.is_file():
+        if self._session is None or not self._cookies_path.is_file():
             return
         try:
             raw = json.loads(self._cookies_path.read_text())
         except (OSError, json.JSONDecodeError):
             return
+        domain = _domain(self._base)
         for name, value in raw.items():
-            self._http.cookies.set(name, str(value), domain=_domain(self._base))
+            self._session.cookies.set(name, str(value), domain=domain)
 
     def _save_cookies(self) -> None:
+        if self._session is None:
+            return
         self._cookies_path.parent.mkdir(parents=True, exist_ok=True)
-        jar = {c.name: c.value for c in self._http.cookies.jar if c.value is not None}
+        jar = {c.name: c.value for c in self._session.cookies.jar if c.value}
         tmp = self._cookies_path.with_suffix(".tmp")
         tmp.write_text(json.dumps(jar))
         tmp.replace(self._cookies_path)
@@ -276,8 +282,7 @@ def _parse_row(row: Node, *, base_url: str) -> dict[str, Any] | None:
         if f_match:
             forum_id = int(f_match.group(1))
 
-    # rutracker renders size as ``<u>EXACT_BYTES</u>HUMAN``; prefer the
-    # exact byte count inside <u> to avoid mis-parsing the concatenated text.
+    # Prefer the exact byte count in <u>; fall back to parsing the GB string.
     size_node = row.css_first("td.tor-size")
     size_bytes = 0
     if size_node is not None:
@@ -286,6 +291,7 @@ def _parse_row(row: Node, *, base_url: str) -> dict[str, Any] | None:
             size_bytes = int(exact.text().strip())
         else:
             size_bytes = _parse_size(size_node.text())
+
     seeders = _to_int(_first_text(row, "b.seedmed"))
     leechers = _to_int(_first_text(row, "td.leechmed b"))
     downloads = _to_int(_first_text(row, "td.number-format"))
@@ -350,10 +356,12 @@ def _match_first(regex: re.Pattern[str], s: str) -> str | None:
     return m.group(1) if m else None
 
 
-def _is_login_page(resp: httpx.Response) -> bool:
-    if "login.php" in str(resp.url):
+def _is_login_page(resp: Any) -> bool:
+    url = str(getattr(resp, "url", ""))
+    if "login.php" in url:
         return True
-    return 'name="login_username"' in resp.text and 'name="login_password"' in resp.text
+    body = getattr(resp, "text", "") or ""
+    return 'name="login_username"' in body and 'name="login_password"' in body
 
 
 def _looks_like_captcha(html: str) -> bool:
@@ -362,7 +370,6 @@ def _looks_like_captcha(html: str) -> bool:
 
 
 def _domain(base_url: str) -> str:
-    # Crude host extraction — good enough for cookie scoping.
     without_scheme = base_url.split("://", 1)[-1]
     return without_scheme.split("/", 1)[0]
 
@@ -373,9 +380,6 @@ def _parse_disposition_filename(value: str) -> str:
         return ""
     raw = m.group(1).strip('"')
     try:
-        # Many responses send filename percent-encoded under UTF-8''.
-        from urllib.parse import unquote
-
         return unquote(raw)
     except Exception:
         return raw
@@ -387,7 +391,6 @@ __all__ = [
     "NotAuthenticated",
     "RutrackerClient",
     "RutrackerError",
-    "SimpleCookie",
     "_parse_search",
     "_parse_size",
 ]
