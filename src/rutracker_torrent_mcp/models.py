@@ -40,7 +40,17 @@ class TorrentSearchResult(_Base):
     # Parsed hints (not a replacement for the full title — the bot shows these
     # on buttons and keeps the raw title in the list description).
     quality: str | None = Field(
-        None, description="Parsed quality tag (e.g. '1080p', '2160p', '720p', 'BDRip')."
+        None,
+        description=(
+            "Resolution tag parsed from the title (e.g. '2160p', '1080p', '720p'). "
+            "Returns the source tag when no resolution is found, for backwards-compat."
+        ),
+    )
+    source: str | None = Field(
+        None,
+        description=(
+            "Release type parsed from the title (e.g. 'WEB-DL', 'BDRip', 'BDRemux', 'WEBRip')."
+        ),
     )
     hdr: bool = Field(False, description="True when the release is HDR / Dolby Vision.")
     url: str = Field(..., description="Absolute URL to the topic page.")

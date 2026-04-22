@@ -52,6 +52,14 @@ class NotAuthenticated(RutrackerError):
 
 _SIZE_RE = re.compile(r"(\d+(?:[\.,]\d+)?)\s*(B|KB|MB|GB|TB)", re.IGNORECASE)
 _SIZE_MULT = {"b": 1, "kb": 1024, "mb": 1024**2, "gb": 1024**3, "tb": 1024**4}
+_RESOLUTION_RE = re.compile(r"\b(2160p|1080p|720p|480p)\b", re.IGNORECASE)
+# Longer matches first so 'BDRemux' wins over 'BDRip' on UHD-Remux uploads.
+_SOURCE_RE = re.compile(
+    r"\b(BDRemux|BD-?Remux|BDRip|BluRay|UHDRip|UHD-BDRip|WEB-?DL|WEBRip|HDTVRip|HDRip|DVDRip)\b",
+    re.IGNORECASE,
+)
+# Legacy combined regex — kept for the `quality` fallback when only a source
+# is present (no resolution tag on older releases).
 _QUALITY_RE = re.compile(r"\b(2160p|1080p|720p|480p|HDTVRip|BDRip|WEB-?DL|WEBRip)\b", re.IGNORECASE)
 _HDR_RE = re.compile(r"\b(HDR|HDR10\+?|Dolby\s?Vision|DV)\b", re.IGNORECASE)
 _DATE_RE = re.compile(r"(\d{4})-(\d{1,2})-(\d{1,2})")
@@ -299,7 +307,15 @@ def _parse_row(row: Node, *, base_url: str) -> dict[str, Any] | None:
     date_node = row.css_first("td.t-data:last-child p") or row.css_first("td:last-child p")
     registered_at = _parse_date(date_node.text() if date_node else "")
 
-    quality = _match_first(_QUALITY_RE, title)
+    resolution = _match_first(_RESOLUTION_RE, title)
+    source = _match_first(_SOURCE_RE, title)
+    # Normalise WEB-DL variants to the canonical form so the UI renders a
+    # single label regardless of uploader formatting ('WEB-DL' / 'WEBDL').
+    if source and source.upper().replace("-", "") == "WEBDL":
+        source = "WEB-DL"
+    # ``quality`` stays populated for backwards-compat: resolution when we
+    # have one, otherwise fall back to the source tag.
+    quality = resolution or source
     hdr = bool(_HDR_RE.search(title))
 
     url = f"{base_url}/forum/viewtopic.php?t={topic_id}"
@@ -315,6 +331,7 @@ def _parse_row(row: Node, *, base_url: str) -> dict[str, Any] | None:
         "downloads": max(downloads, 0),
         "registered_at": registered_at,
         "quality": quality,
+        "source": source,
         "hdr": hdr,
         "url": url,
     }
