@@ -376,18 +376,24 @@ def _parse_topic(html: str, *, topic_id: int, base_url: str) -> dict[str, Any] |
         if m:
             forum_id = int(m.group(1))
 
-    # Size: rutracker prints "Размер: <N> <unit>" inside the first post.
-    # Anchor on the label — a bare _SIZE_RE.search(html) over the whole
-    # page picks up anything ending in B/KB/MB/GB (CSS class names,
-    # minified script literals, byte-counter widgets), which is how we
-    # used to return absurd values like 5 B for a 70 GB release.
+    # Size: rutracker emits the exact byte count as the `title` attribute
+    # of the `.size-humn` span (e.g. `<span class="size-humn"
+    # title="3125789685">2.91 GB</span>`). Prefer that — a bare
+    # _SIZE_RE.search() over the whole page used to match `<input size=5>`
+    # and return 5 B for a 3 GB release. Fallback to a label-anchored
+    # regex if the markup ever changes.
     size_bytes = 0
-    m = _SIZE_LABELED_RE.search(html.replace(",", "."))
-    if m:
-        try:
-            size_bytes = int(float(m.group(1)) * _SIZE_MULT[m.group(2).lower()])
-        except (KeyError, ValueError):
-            size_bytes = 0
+    size_node = tree.css_first(".size-humn[title]")
+    title_attr = (size_node.attributes.get("title") or "") if size_node else ""
+    if title_attr.strip().isdigit():
+        size_bytes = int(title_attr)
+    else:
+        m = _SIZE_LABELED_RE.search(html.replace(",", "."))
+        if m:
+            try:
+                size_bytes = int(float(m.group(1)) * _SIZE_MULT[m.group(2).lower()])
+            except (KeyError, ValueError):
+                size_bytes = 0
 
     registered_at = _parse_date(html)
 
