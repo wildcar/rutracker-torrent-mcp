@@ -383,7 +383,10 @@ def _parse_topic(html: str, *, topic_id: int, base_url: str) -> dict[str, Any] |
     # and return 5 B for a 3 GB release. Fallback to a label-anchored
     # regex if the markup ever changes.
     size_bytes = 0
-    size_node = tree.css_first(".size-humn[title]")
+    size_node = (
+        tree.css_first("#tor-size-humn[title]")
+        or tree.css_first(".size-humn[title]")
+    )
     title_attr = (size_node.attributes.get("title") or "") if size_node else ""
     if title_attr.strip().isdigit():
         size_bytes = int(title_attr)
