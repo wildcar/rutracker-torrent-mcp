@@ -51,6 +51,14 @@ class NotAuthenticated(RutrackerError):
 
 
 _SIZE_RE = re.compile(r"(\d+(?:[\.,]\d+)?)\s*(B|KB|MB|GB|TB)", re.IGNORECASE)
+# For viewtopic.php whole-page parsing: only trust a size that follows
+# the «Размер:» / «Size:» label. Anything else on the page is a false
+# match (CSS classes, JS, layout widgets).
+_SIZE_LABELED_RE = re.compile(
+    r"(?:Размер|Size)\s*:?\s*(?:</[^>]+>\s*)*"
+    r"(\d+(?:[\.,]\d+)?)\s*(B|KB|MB|GB|TB)\b",
+    re.IGNORECASE,
+)
 _SIZE_MULT = {"b": 1, "kb": 1024, "mb": 1024**2, "gb": 1024**3, "tb": 1024**4}
 _RESOLUTION_RE = re.compile(r"\b(2160p|1080p|720p|480p)\b", re.IGNORECASE)
 # Longer matches first so 'BDRemux' wins over 'BDRip' on UHD-Remux uploads.
@@ -369,9 +377,12 @@ def _parse_topic(html: str, *, topic_id: int, base_url: str) -> dict[str, Any] |
             forum_id = int(m.group(1))
 
     # Size: rutracker prints "Размер: <N> <unit>" inside the first post.
-    # Best-effort regex; falls back to 0 when not present.
+    # Anchor on the label — a bare _SIZE_RE.search(html) over the whole
+    # page picks up anything ending in B/KB/MB/GB (CSS class names,
+    # minified script literals, byte-counter widgets), which is how we
+    # used to return absurd values like 5 B for a 70 GB release.
     size_bytes = 0
-    m = _SIZE_RE.search(html.replace(",", "."))
+    m = _SIZE_LABELED_RE.search(html.replace(",", "."))
     if m:
         try:
             size_bytes = int(float(m.group(1)) * _SIZE_MULT[m.group(2).lower()])

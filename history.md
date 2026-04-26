@@ -6,6 +6,18 @@ interrupted; expand it with results once the change lands.
 
 ---
 
+## 2026-04-26 — Anchor topic-page size parser on the «Размер» label
+
+Live test on a real topic returned `size_bytes=5` for a 75 GB release —
+`_SIZE_RE.search(html)` was matching anything that happened to end in
+`B`/`KB`/`MB`/`GB`/`TB` somewhere on the page (CSS class names,
+embedded scripts, byte-counter widgets). Added `_SIZE_LABELED_RE`
+which only fires when the size token follows a `Размер:` / `Size:`
+label, and pointed `_parse_topic` at it. `_parse_search` is unchanged —
+it scopes the regex to the size cell already.
+
+---
+
 ## 2026-04-26 — `get_topic_info(topic_id)` tool
 
 **Why.** Bot needs to handle the case where a user pastes a rutracker topic
