@@ -26,10 +26,12 @@ from .clients.rutracker import (
 from .context import AppContext
 from .models import (
     GetMagnetLinkResponse,
+    GetTopicInfoResponse,
     GetTorrentFileResponse,
     MagnetLink,
     SearchTorrentsResponse,
     ToolError,
+    TopicInfo,
     TorrentFile,
     TorrentSearchResult,
 )
@@ -166,6 +168,49 @@ async def get_magnet_link_impl(ctx: AppContext, topic_id: int) -> GetMagnetLinkR
 
 
 # ---------------------------------------------------------------------------
+# get_topic_info
+# ---------------------------------------------------------------------------
+
+
+async def get_topic_info_impl(ctx: AppContext, topic_id: int) -> GetTopicInfoResponse:
+    if topic_id <= 0:
+        return GetTopicInfoResponse(
+            error=ToolError(
+                code="invalid_argument", message="`topic_id` must be a positive integer."
+            )
+        )
+
+    cache_key = ctx.cache.make_key("get_topic_info", {"t": topic_id})
+    if (cached := await ctx.cache.get(cache_key)) is not None:
+        return GetTopicInfoResponse.model_validate(cached)
+
+    try:
+        raw = await ctx.rutracker.topic_info(topic_id)
+    except (LoginCaptchaRequired, LoginFailed, NotAuthenticated) as exc:
+        return GetTopicInfoResponse(error=_auth_error(exc))
+    except RutrackerError as exc:
+        return GetTopicInfoResponse(
+            error=ToolError(code="upstream_error", message=f"rutracker topic fetch failed: {exc}")
+        )
+
+    if raw is None:
+        return GetTopicInfoResponse(
+            error=ToolError(
+                code="not_found",
+                message=f"No parseable title on topic {topic_id} (removed or restricted?).",
+            )
+        )
+
+    response = GetTopicInfoResponse(topic=TopicInfo(**raw))
+    # Topic title rarely changes; reuse the search-cache TTL bucket so we
+    # don't hammer rutracker on retries.
+    await ctx.cache.set(
+        cache_key, response.model_dump(mode="json"), ctx.settings.cache_ttl_search_seconds
+    )
+    return response
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
@@ -196,6 +241,7 @@ def _auth_error(exc: Exception) -> ToolError:
 
 __all__ = [
     "get_magnet_link_impl",
+    "get_topic_info_impl",
     "get_torrent_file_impl",
     "search_torrents_impl",
 ]

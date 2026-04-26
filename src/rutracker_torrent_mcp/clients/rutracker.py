@@ -160,6 +160,16 @@ class RutrackerClient:
         m = re.search(r"(magnet:\?xt=urn:btih:[A-Za-z0-9:%&=+\-\.\w]+)", html)
         return m.group(1) if m else None
 
+    async def topic_info(self, topic_id: int) -> dict[str, Any] | None:
+        """Fetch topic metadata (title + forum + size + date) by topic id.
+
+        Returns ``None`` when the topic page does not carry a parseable
+        title — either the topic was removed or rutracker served a
+        non-topic page (e.g. an error stub).
+        """
+        html = await self._authed_get_html("/forum/viewtopic.php", params={"t": topic_id})
+        return _parse_topic(html, topic_id=topic_id, base_url=self._base)
+
     # ------------------------------------------------------------------
     # Session management
     # ------------------------------------------------------------------
@@ -334,6 +344,50 @@ def _parse_row(row: Node, *, base_url: str) -> dict[str, Any] | None:
         "source": source,
         "hdr": hdr,
         "url": url,
+    }
+
+
+def _parse_topic(html: str, *, topic_id: int, base_url: str) -> dict[str, Any] | None:
+    tree = HTMLParser(html)
+    title_node = tree.css_first("a#topic-title") or tree.css_first("h1.maintitle a")
+    if title_node is None:
+        return None
+    title = _clean_text(title_node.text())
+    if not title:
+        return None
+
+    forum_id: int | None = None
+    forum_name: str | None = None
+    # Breadcrumb anchors all point at viewforum.php?f=…; the deepest (last)
+    # one is the topic's own forum.
+    forum_links = tree.css('a[href*="viewforum.php?f="]')
+    if forum_links:
+        last = forum_links[-1]
+        forum_name = _clean_text(last.text()) or None
+        m = re.search(r"f=(\d+)", last.attributes.get("href") or "")
+        if m:
+            forum_id = int(m.group(1))
+
+    # Size: rutracker prints "Размер: <N> <unit>" inside the first post.
+    # Best-effort regex; falls back to 0 when not present.
+    size_bytes = 0
+    m = _SIZE_RE.search(html.replace(",", "."))
+    if m:
+        try:
+            size_bytes = int(float(m.group(1)) * _SIZE_MULT[m.group(2).lower()])
+        except (KeyError, ValueError):
+            size_bytes = 0
+
+    registered_at = _parse_date(html)
+
+    return {
+        "topic_id": topic_id,
+        "title": title,
+        "forum_id": forum_id,
+        "forum_name": forum_name,
+        "size_bytes": size_bytes,
+        "registered_at": registered_at,
+        "url": f"{base_url}/forum/viewtopic.php?t={topic_id}",
     }
 
 

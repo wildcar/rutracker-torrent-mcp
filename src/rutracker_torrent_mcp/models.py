@@ -83,3 +83,27 @@ class MagnetLink(_Base):
 class GetMagnetLinkResponse(_Base):
     magnet: MagnetLink | None = None
     error: ToolError | None = None
+
+
+class TopicInfo(_Base):
+    """Lightweight metadata for a rutracker topic, parsed from the topic page.
+
+    Used by the bot when the user pastes a rutracker URL directly: we need
+    the title (to attempt an IMDb match against movie-metadata-mcp) and the
+    forum context, without fetching the whole .torrent file.
+    """
+
+    topic_id: int
+    title: str = Field(..., description="Raw topic title (release name).")
+    forum_id: int | None = None
+    forum_name: str | None = None
+    size_bytes: int = Field(0, ge=0)
+    registered_at: str | None = Field(
+        None, description="ISO-8601 upload date (YYYY-MM-DD), if parseable."
+    )
+    url: str
+
+
+class GetTopicInfoResponse(_Base):
+    topic: TopicInfo | None = None
+    error: ToolError | None = None

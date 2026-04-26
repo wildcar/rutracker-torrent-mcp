@@ -7,6 +7,7 @@ import base64
 from rutracker_torrent_mcp.context import AppContext
 from rutracker_torrent_mcp.tools import (
     get_magnet_link_impl,
+    get_topic_info_impl,
     get_torrent_file_impl,
     search_torrents_impl,
 )
@@ -130,6 +131,41 @@ async def test_get_magnet_link_not_found(app_ctx: AppContext, fake_session: Fake
     )
 
     resp = await get_magnet_link_impl(app_ctx, 42)
+    assert resp.error is not None
+    assert resp.error.code == "not_found"
+
+
+async def test_get_topic_info_parses_title_and_forum(
+    app_ctx: AppContext, fake_session: FakeSession
+) -> None:
+    from pathlib import Path
+
+    html = (Path(__file__).parent / "fixtures" / "tracker_topic.html").read_text()
+    fake_session.on("GET", "/forum/viewtopic.php", lambda url, kw: FakeResponse(200, b"", html))
+
+    resp = await get_topic_info_impl(app_ctx, 6843582)
+    assert resp.error is None
+    assert resp.topic is not None
+    assert resp.topic.topic_id == 6843582
+    assert "Дюна" in resp.topic.title
+    assert resp.topic.forum_id == 187
+    assert resp.topic.forum_name == "Зарубежное кино"
+    assert resp.topic.size_bytes > 70 * 1024**3
+    assert resp.topic.registered_at == "2024-04-15"
+    assert resp.topic.url.endswith("?t=6843582")
+
+
+async def test_get_topic_info_rejects_bad_id(app_ctx: AppContext) -> None:
+    resp = await get_topic_info_impl(app_ctx, 0)
+    assert resp.error is not None
+    assert resp.error.code == "invalid_argument"
+
+
+async def test_get_topic_info_not_found(app_ctx: AppContext, fake_session: FakeSession) -> None:
+    fake_session.on(
+        "GET", "/forum/viewtopic.php", lambda url, kw: FakeResponse(200, b"", "<html></html>")
+    )
+    resp = await get_topic_info_impl(app_ctx, 42)
     assert resp.error is not None
     assert resp.error.code == "not_found"
 
