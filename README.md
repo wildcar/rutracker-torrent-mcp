@@ -24,6 +24,12 @@ relogins once and retries.
 
 Parses the magnet link off the topic page.
 
+### `get_topic_info(topic_id)`
+
+Fetches topic metadata — title, forum, size, registered date, and the
+canonical topic URL — **without** downloading the `.torrent`. Used to resolve
+a pasted rutracker topic URL into a release the metadata flow can match.
+
 ## Captcha / login
 
 rutracker sometimes responds to a fresh login with a captcha. The tool layer
