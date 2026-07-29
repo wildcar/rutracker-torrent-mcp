@@ -45,6 +45,10 @@ class LoginCaptchaRequired(RutrackerError):
     """rutracker asked for a captcha — we can't solve it automatically."""
 
 
+class ManualLoginRequired(RutrackerError):
+    """The persistent browser needs operator interaction."""
+
+
 class NotAuthenticated(RutrackerError):
     """The operation needs an authenticated session and no valid cookie
     is available."""
@@ -483,6 +487,7 @@ def _parse_disposition_filename(value: str) -> str:
 __all__ = [
     "LoginCaptchaRequired",
     "LoginFailed",
+    "ManualLoginRequired",
     "NotAuthenticated",
     "RutrackerClient",
     "RutrackerError",

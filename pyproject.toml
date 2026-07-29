@@ -19,6 +19,7 @@ dependencies = [
     "structlog>=24.1",
     "aiosqlite>=0.20",
     "selectolax>=0.3.21",
+    "playwright>=1.52,<2",
 ]
 
 [project.scripts]
@@ -64,6 +65,10 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = "curl_cffi.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "playwright.*"
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

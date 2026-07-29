@@ -16,9 +16,11 @@ The download key the rest of the system uses is the composite `media_id`
 ## Stack
 
 - Python ≥ 3.11, `asyncio`.
-- **`curl_cffi`** as the HTTP client (impersonates Chrome's TLS/JA3 fingerprint).
-  rutracker sits behind a CDN that fingerprints handshakes — stock `httpx` hangs on
-  `ReadTimeout`; `curl_cffi` passes through.
+- Two selectable acquisition backends:
+  - **`curl_cffi`** for ordinary cookie sessions and local development.
+  - **Playwright over CDP** for Cloudflare-protected production sessions. It connects
+    to an externally managed, persistent, headful Chromium profile; all protected
+    navigation and torrent downloads stay inside that browser context.
 - **`selectolax`** for HTML parsing.
 - `pydantic` v2 + `pydantic-settings`; `structlog` (JSON); `aiosqlite` TTL cache.
 - Tests: `pytest` + `pytest-asyncio` + `respx`, HTML fixtures; opt-in `integration`
@@ -63,6 +65,14 @@ breadcrumb for forum id/name; best-effort size + upload date. Missing title →
 `not_found`. Cached at the search TTL (titles rarely change).
 
 ## Auth, cookie session & captcha
+
+- `RUTRACKER_BACKEND=curl|playwright` selects the client. Playwright mode connects
+  to `RUTRACKER_BROWSER_CDP_URL` (default `http://127.0.0.1:9222`) and never submits
+  credentials itself. The operator opens the same persistent Chromium display via
+  loopback-only noVNC over an SSH tunnel, completes Cloudflare/login manually, and
+  closes the tab. The profile survives MCP and host restarts.
+- A missing/expired Playwright browser session maps to
+  `ToolError(code="manual_auth_required", …)`; automatic retries cannot solve it.
 
 - Login is `POST /forum/login.php` (rate-limited, captcha-prone). On success the
   client holds a `bb_session` cookie, persisted to `RUTRACKER_COOKIES_PATH` (default

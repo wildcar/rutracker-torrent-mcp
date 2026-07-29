@@ -1,0 +1,19 @@
+[Unit]
+Description=Loopback noVNC gateway for Rutracker Chromium
+After=rutracker-browser-vnc.service
+Requires=rutracker-browser-vnc.service
+
+[Service]
+Type=simple
+User=movie
+Group=movie
+ExecStart=/usr/bin/websockify --web=/usr/share/novnc 127.0.0.1:6080 127.0.0.1:5901
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+
+[Install]
+WantedBy=multi-user.target

@@ -11,17 +11,18 @@ movie_handler bot, via authenticated HTML scraping.
 
 - Four tools live and tested: `search_torrents`, `get_torrent_file`,
   `get_magnet_link`, `get_topic_info`.
-- Protected GETs treat a login page or HTTP `401`/`403` as an expired session,
-  refresh `bb_session` once under a lock, and retry exactly once.
-- Fix commit `36db7df` is pushed; the bot-host checkout is still on `c559252`
-  because this session cannot elevate through sudo.
-- The previous build remains deployed as a systemd unit, bound `127.0.0.1:8767`.
+- Selectable `curl` and persistent Playwright/CDP backends are implemented.
+- Playwright mode keeps all protected requests inside one headful Chromium profile;
+  missing auth returns `manual_auth_required`.
+- Loopback-only Xvfb/x11vnc/noVNC units and the browser launcher are ready for
+  production deployment.
+- SOCKS5 egress through `212.192.223.34` is active on the bot host.
 - Harness migrated to the `agent-template` layout.
 
 ## Next
 
-- Deploy `36db7df` on the bot host, restart `rutracker-torrent-mcp.service`, and
-  verify that a live search refreshes the stale cookie.
+- Deploy the browser stack, complete the first login through noVNC, and verify all
+  four live MCP tools.
 - (when needed) Additional trackers under `clients/` (noname-club, kinozal).
 
 ## Open questions

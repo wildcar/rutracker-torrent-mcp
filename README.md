@@ -33,6 +33,19 @@ a pasted rutracker topic URL into a release the metadata flow can match.
 
 ## Captcha / login
 
+Production can use `RUTRACKER_BACKEND=playwright`. In this mode MCP connects to
+a persistent headful Chromium over loopback CDP; search, topic pages, magnets and
+`.torrent` downloads all stay inside the same browser context. Initial login and
+future Cloudflare challenges are completed manually through loopback-only noVNC:
+
+```bash
+ssh -L 6080:127.0.0.1:6080 keeper@208.92.227.90
+```
+
+Then open `http://127.0.0.1:6080/vnc.html?autoconnect=1&resize=scale`. The Chromium
+profile survives service and host restarts. A session requiring operator action
+returns `manual_auth_required`.
+
 rutracker sometimes responds to a fresh login with a captcha. The tool layer
 translates that into a structured error:
 
@@ -61,6 +74,8 @@ and never loops.
 | `RUTRACKER_COOKIES_PATH` |  | `.cache/cookies.json` | Persisted cookie jar. |
 | `RUTRACKER_PROXY_URL` |  | — | Optional SOCKS5/HTTP proxy. |
 | `RUTRACKER_BASE_URL` |  | `https://rutracker.org` | Override to a mirror if needed. |
+| `RUTRACKER_BACKEND` |  | `curl` | `curl` or persistent `playwright`. |
+| `RUTRACKER_BROWSER_CDP_URL` |  | `http://127.0.0.1:9222` | Persistent Chromium CDP endpoint. |
 | `MCP_AUTH_TOKEN` | for HTTP | — | Bearer token shared with the bot. |
 | `MCP_TRANSPORT` |  | `stdio` | One of `stdio`, `sse`, `streamable-http`. |
 | `MCP_HTTP_HOST` |  | `127.0.0.1` | Bind host for HTTP transports. |

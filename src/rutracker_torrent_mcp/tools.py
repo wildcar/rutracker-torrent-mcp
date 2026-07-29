@@ -20,6 +20,7 @@ import structlog
 from .clients.rutracker import (
     LoginCaptchaRequired,
     LoginFailed,
+    ManualLoginRequired,
     NotAuthenticated,
     RutrackerError,
 )
@@ -69,7 +70,7 @@ async def search_torrents_impl(
         # Ask rutracker for the top ``limit`` by seeders and filter locally
         # since the tracker has no "min seeders" query parameter.
         raw_rows = await ctx.rutracker.search(query, category=category, limit=limit * 3)
-    except (LoginCaptchaRequired, LoginFailed, NotAuthenticated) as exc:
+    except (LoginCaptchaRequired, LoginFailed, ManualLoginRequired, NotAuthenticated) as exc:
         return SearchTorrentsResponse(error=_auth_error(exc))
     except RutrackerError as exc:
         return SearchTorrentsResponse(
@@ -109,7 +110,7 @@ async def get_torrent_file_impl(ctx: AppContext, topic_id: int) -> GetTorrentFil
 
     try:
         filename, content = await ctx.rutracker.download_torrent(topic_id)
-    except (LoginCaptchaRequired, LoginFailed, NotAuthenticated) as exc:
+    except (LoginCaptchaRequired, LoginFailed, ManualLoginRequired, NotAuthenticated) as exc:
         return GetTorrentFileResponse(error=_auth_error(exc))
     except RutrackerError as exc:
         return GetTorrentFileResponse(
@@ -148,7 +149,7 @@ async def get_magnet_link_impl(ctx: AppContext, topic_id: int) -> GetMagnetLinkR
 
     try:
         magnet = await ctx.rutracker.magnet_link(topic_id)
-    except (LoginCaptchaRequired, LoginFailed, NotAuthenticated) as exc:
+    except (LoginCaptchaRequired, LoginFailed, ManualLoginRequired, NotAuthenticated) as exc:
         return GetMagnetLinkResponse(error=_auth_error(exc))
     except RutrackerError as exc:
         return GetMagnetLinkResponse(
@@ -186,7 +187,7 @@ async def get_topic_info_impl(ctx: AppContext, topic_id: int) -> GetTopicInfoRes
 
     try:
         raw = await ctx.rutracker.topic_info(topic_id)
-    except (LoginCaptchaRequired, LoginFailed, NotAuthenticated) as exc:
+    except (LoginCaptchaRequired, LoginFailed, ManualLoginRequired, NotAuthenticated) as exc:
         return GetTopicInfoResponse(error=_auth_error(exc))
     except RutrackerError as exc:
         return GetTopicInfoResponse(
@@ -217,6 +218,14 @@ async def get_topic_info_impl(ctx: AppContext, topic_id: int) -> GetTopicInfoRes
 
 def _auth_error(exc: Exception) -> ToolError:
     """Translate an authentication-path exception into a stable tool error."""
+    if isinstance(exc, ManualLoginRequired):
+        return ToolError(
+            code="manual_auth_required",
+            message=(
+                "rutracker browser session requires manual authentication. "
+                "Open persistent Chromium through noVNC and complete Cloudflare/login."
+            ),
+        )
     if isinstance(exc, LoginCaptchaRequired):
         return ToolError(
             code="captcha_required",

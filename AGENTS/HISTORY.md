@@ -4,6 +4,12 @@ Newest first. Each entry ≤5 lines using the format defined in `AGENTS.md`.
 
 ---
 
+## 2026-07-29 · Persistent Playwright backend with manual noVNC login
+- What: Added a CDP Playwright client, persistent Chromium/Xvfb/noVNC units, browser-only torrent fetches, config/docs, and tests.
+- Why: Cloudflare binds clearance to the real browser fingerprint, so exported cookies fail in `curl_cffi`.
+- Files: `clients/browser.py`, `context.py`, `config.py`, `tools.py`, `deploy/`, `tests/test_browser.py`, docs/env.
+- Next: Deploy, log in through SSH-forwarded noVNC, and live-test all MCP tools.
+
 ## 2026-07-29 · Recover expired rutracker sessions returned as HTTP 403
 - What: Protected GETs now relogin once on login pages or HTTP 401/403; concurrent failures share the refreshed cookie and a second 403 stops.
 - Why: `/forum/tracker.php` changed expired-session behavior from a login form to HTTP 403, breaking torrent search.

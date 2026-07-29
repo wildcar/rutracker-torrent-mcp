@@ -1,0 +1,18 @@
+[Unit]
+Description=Loopback VNC for Rutracker Chromium
+After=rutracker-browser-xvfb.service
+Requires=rutracker-browser-xvfb.service
+
+[Service]
+Type=simple
+User=movie
+Group=movie
+ExecStart=/usr/bin/x11vnc -display :99 -localhost -rfbport 5901 -forever -shared -nopw
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+ProtectHome=true
+ProtectSystem=strict
+
+[Install]
+WantedBy=multi-user.target

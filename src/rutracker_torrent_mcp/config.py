@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -17,6 +18,8 @@ class Settings(BaseSettings):
     rutracker_cookies_path: Path = Field(Path(".cache/cookies.json"))
     rutracker_proxy_url: str | None = None
     rutracker_base_url: str = "https://rutracker.org"
+    rutracker_backend: Literal["curl", "playwright"] = "curl"
+    rutracker_browser_cdp_url: str = "http://127.0.0.1:9222"
 
     mcp_auth_token: str | None = None
     cache_path: Path = Field(Path(".cache/rutracker.sqlite"))
