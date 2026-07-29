@@ -11,13 +11,14 @@ Environment=DISPLAY=:99
 Environment=HOME=/var/lib/rutracker-browser/home
 Environment=PLAYWRIGHT_BROWSERS_PATH=/var/lib/rutracker-browser/playwright
 Environment=RUTRACKER_BROWSER_PROFILE=/var/lib/rutracker-browser/profile
+ExecStartPre=/bin/sh -c 'until test -S /tmp/.X11-unix/X99; do sleep 0.1; done'
 ExecStart=/opt/rutracker-torrent-mcp/deploy/run-browser.sh
 Restart=always
 RestartSec=5
 NoNewPrivileges=true
 ProtectHome=true
 ProtectSystem=strict
-ReadWritePaths=/var/lib/rutracker-browser
+ReadWritePaths=/tmp /var/lib/rutracker-browser
 
 [Install]
 WantedBy=multi-user.target

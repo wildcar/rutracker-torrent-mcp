@@ -16,7 +16,7 @@ browser=$(
 
 exec "$browser" \
   --disable-dev-shm-usage \
-  --disable-setuid-sandbox \
+  --no-sandbox \
   --no-first-run \
   --no-default-browser-check \
   --remote-debugging-address=127.0.0.1 \

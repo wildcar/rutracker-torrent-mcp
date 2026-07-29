@@ -12,6 +12,7 @@ RestartSec=3
 NoNewPrivileges=true
 ProtectHome=true
 ProtectSystem=strict
+ReadWritePaths=/tmp
 
 [Install]
 WantedBy=multi-user.target
