@@ -18,7 +18,8 @@ registered date, parsed quality (`1080p`, `2160p`, `WEB-DL`, …), and an
 Downloads the `.torrent` via `/forum/dl.php?t=...`. Returns the raw bytes
 **base64-encoded** along with the filename the tracker suggests. An
 authenticated session is required; if the current cookie expired the client
-relogins once and retries.
+relogins once and retries. This applies both to login-page responses and to
+HTTP `401`/`403`, which rutracker uses for missing or expired sessions.
 
 ### `get_magnet_link(topic_id)`
 
@@ -48,7 +49,8 @@ small JSON map:
 ```
 
 On restart the client reuses the cookie and never asks for credentials. An
-expired cookie triggers one silent relogin attempt.
+expired cookie triggers one silent relogin attempt; the request is retried once
+and never loops.
 
 ## Env variables
 

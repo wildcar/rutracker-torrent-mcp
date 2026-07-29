@@ -4,6 +4,12 @@ Newest first. Each entry ≤5 lines using the format defined in `AGENTS.md`.
 
 ---
 
+## 2026-07-29 · Recover expired rutracker sessions returned as HTTP 403
+- What: Protected GETs now relogin once on login pages or HTTP 401/403; concurrent failures share the refreshed cookie and a second 403 stops.
+- Why: `/forum/tracker.php` changed expired-session behavior from a login form to HTTP 403, breaking torrent search.
+- Files: `clients/rutracker.py`, `tests/test_tools.py`, `tests/test_parsing.py`, `README.md`, `AGENTS/{SPEC,STATE,HISTORY}.md`.
+- Next: Deploy on the bot host and verify a live search refreshes the stale cookie.
+
 ## 2026-06-23 · Migrate to agent-template harness
 - What: Added `AGENTS.md`, `CLAUDE.md` pointer, `AGENTS/{SPEC,STATE,HISTORY,MEMORY,ENV}.md`, `docs/adr/TEMPLATE.md`; folded `history.md`/`env.md`.
 - Why: Adopt the standard workspace harness; keep repo-local context authoritative inside the repo.

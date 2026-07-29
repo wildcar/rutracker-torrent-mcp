@@ -35,7 +35,8 @@ def test_parse_search_extracts_three_rows(search_html: str) -> None:
     assert top["url"].endswith("viewtopic.php?t=6126543")
 
     mid = by_id[6200000]
-    assert mid["quality"] == "WEB-DL"  # our regex captures WEB-DL before 720p
+    assert mid["quality"] == "720p"
+    assert mid["source"] == "WEB-DL"
     assert mid["hdr"] is False
 
     uhd = by_id[6300000]

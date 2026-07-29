@@ -68,8 +68,10 @@ breadcrumb for forum id/name; best-effort size + upload date. Missing title →
   client holds a `bb_session` cookie, persisted to `RUTRACKER_COOKIES_PATH` (default
   `.cache/cookies.json`) and reused across restarts — credentials aren't re-sent
   while the cookie is valid.
-- **Auto-relogin:** an authed GET that returns the login page (expired cookie)
-  triggers exactly **one** silent relogin + retry.
+- **Auto-relogin:** an authed GET that returns the login page or HTTP `401`/`403`
+  (rutracker currently uses `403` for a missing/expired session on
+  `/forum/tracker.php`) triggers exactly **one** silent relogin + retry. A second
+  auth failure is returned as an upstream error; there is no retry loop.
 - **Captcha:** when rutracker answers a fresh login with a captcha
   (`cap_sid` / `name="cap_code"` markers), the client raises `LoginCaptchaRequired`,
   which the tool layer maps to `ToolError(code="captcha_required", …)`. The captcha

@@ -48,6 +48,64 @@ async def test_search_torrents_applies_min_seeders(
     assert 6200000 in ids
 
 
+async def test_search_torrents_relogs_once_on_403(
+    app_ctx: AppContext, fake_session: FakeSession, search_html: str
+) -> None:
+    tracker_calls = 0
+    login_calls = 0
+
+    def tracker_handler(url: str, kw: object) -> FakeResponse:
+        nonlocal tracker_calls
+        tracker_calls += 1
+        if tracker_calls == 1:
+            return FakeResponse(403, b"", "<html>Forbidden</html>", {}, url)
+        return FakeResponse(200, b"", search_html, {}, url)
+
+    def login_handler(url: str, kw: object) -> FakeResponse:
+        nonlocal login_calls
+        login_calls += 1
+        fake_session.cookies.set("bb_session", "fresh", domain="rutracker.org")
+        return FakeResponse(200, b"", "<html>Logged in</html>", {}, url)
+
+    fake_session.on("GET", "/forum/tracker.php", tracker_handler)
+    fake_session.on("POST", "/forum/login.php", login_handler)
+
+    resp = await search_torrents_impl(app_ctx, "Дюна", limit=2)
+
+    assert resp.error is None
+    assert len(resp.results) == 2
+    assert tracker_calls == 2
+    assert login_calls == 1
+
+
+async def test_search_torrents_does_not_loop_when_retry_is_403(
+    app_ctx: AppContext, fake_session: FakeSession
+) -> None:
+    tracker_calls = 0
+    login_calls = 0
+
+    def tracker_handler(url: str, kw: object) -> FakeResponse:
+        nonlocal tracker_calls
+        tracker_calls += 1
+        return FakeResponse(403, b"", "<html>Forbidden</html>", {}, url)
+
+    def login_handler(url: str, kw: object) -> FakeResponse:
+        nonlocal login_calls
+        login_calls += 1
+        fake_session.cookies.set("bb_session", "fresh", domain="rutracker.org")
+        return FakeResponse(200, b"", "<html>Logged in</html>", {}, url)
+
+    fake_session.on("GET", "/forum/tracker.php", tracker_handler)
+    fake_session.on("POST", "/forum/login.php", login_handler)
+
+    resp = await search_torrents_impl(app_ctx, "Дюна")
+
+    assert resp.error is not None
+    assert resp.error.code == "upstream_error"
+    assert tracker_calls == 2
+    assert login_calls == 1
+
+
 async def test_search_torrents_rejects_empty_query(app_ctx: AppContext) -> None:
     resp = await search_torrents_impl(app_ctx, "   ")
     assert resp.error is not None

@@ -143,9 +143,7 @@ class RutrackerClient:
 
     async def download_torrent(self, topic_id: int) -> tuple[str, bytes]:
         """Fetch the raw .torrent bytes for ``topic_id``."""
-        resp = await self._authed_get(
-            "/forum/dl.php", params={"t": topic_id}, accept_redirect_to_login=False
-        )
+        resp = await self._authed_get("/forum/dl.php", params={"t": topic_id})
         ctype = (resp.headers.get("content-type") or "").lower()
         content = resp.content
         if "x-bittorrent" not in ctype and not content.startswith(b"d"):
@@ -211,12 +209,15 @@ class RutrackerClient:
         self._save_cookies()
 
     def _has_bb_session(self) -> bool:
+        return self._bb_session_value() is not None
+
+    def _bb_session_value(self) -> str | None:
         if self._session is None:
-            return False
+            return None
         for cookie in self._session.cookies.jar:
             if cookie.name == "bb_session" and cookie.value:
-                return True
-        return False
+                return str(cookie.value)
+        return None
 
     # ------------------------------------------------------------------
     # HTTP helpers
@@ -230,17 +231,19 @@ class RutrackerClient:
         path: str,
         *,
         params: dict[str, Any] | None = None,
-        accept_redirect_to_login: bool = True,
     ) -> Any:
         await self.ensure_session()
         assert self._session is not None
         url = self._base + path
+        failed_cookie = self._bb_session_value()
         resp = await self._session.get(url, params=params)
-        if accept_redirect_to_login and _is_login_page(resp):
-            # Cookie expired — relogin once.
-            self._session.cookies.clear()
+        if _is_auth_failure(resp):
+            # Refresh only the cookie that produced the failed response. Another
+            # concurrent request may already have replaced it while we waited.
             async with self._login_lock:
-                await self._do_login()
+                if self._bb_session_value() == failed_cookie:
+                    self._session.cookies.clear()
+                    await self._do_login()
             resp = await self._session.get(url, params=params)
         if resp.status_code >= 400:
             raise RutrackerError(f"rutracker {path} → HTTP {resp.status_code}")
@@ -450,6 +453,10 @@ def _is_login_page(resp: Any) -> bool:
         return True
     body = getattr(resp, "text", "") or ""
     return 'name="login_username"' in body and 'name="login_password"' in body
+
+
+def _is_auth_failure(resp: Any) -> bool:
+    return getattr(resp, "status_code", 0) in {401, 403} or _is_login_page(resp)
 
 
 def _looks_like_captcha(html: str) -> bool:
