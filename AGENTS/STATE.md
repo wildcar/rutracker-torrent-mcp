@@ -14,15 +14,16 @@ movie_handler bot, via authenticated HTML scraping.
 - Selectable `curl` and persistent Playwright/CDP backends are implemented.
 - Playwright mode keeps all protected requests inside one headful Chromium profile;
   missing auth returns `manual_auth_required`.
-- Loopback-only Xvfb/x11vnc/noVNC units and the browser launcher are ready for
-  production deployment.
+- Production runs commit `b33bb74` with loopback-only Xvfb/x11vnc/noVNC/CDP;
+  the persistent profile is authenticated.
 - SOCKS5 egress through `212.192.223.34` is active on the bot host.
+- All four tools are live-verified through the browser backend; `.torrent` download
+  returned a valid 47,779-byte file.
 - Harness migrated to the `agent-template` layout.
 
 ## Next
 
-- Deploy the browser stack, complete the first login through noVNC, and verify all
-  four live MCP tools.
+- Monitor session lifetime; use noVNC again when `manual_auth_required` is returned.
 - (when needed) Additional trackers under `clients/` (noname-club, kinozal).
 
 ## Open questions

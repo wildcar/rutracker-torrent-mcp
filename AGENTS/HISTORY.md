@@ -4,6 +4,12 @@ Newest first. Each entry ≤5 lines using the format defined in `AGENTS.md`.
 
 ---
 
+## 2026-07-29 · Deploy and authorize persistent browser backend
+- What: Deployed Chromium/Xvfb/noVNC/CDP, authenticated the profile, restricted the SSH key to forwarding, and live-tested all four tools.
+- Why: Complete the Cloudflare-compatible Rutracker recovery end to end.
+- Files: production systemd/env/profile; `AGENTS/STATE.md`.
+- Next: Reopen noVNC only when MCP reports `manual_auth_required`.
+
 ## 2026-07-29 · Persistent Playwright backend with manual noVNC login
 - What: Added a CDP Playwright client, persistent Chromium/Xvfb/noVNC units, browser-only torrent fetches, config/docs, and tests.
 - Why: Cloudflare binds clearance to the real browser fingerprint, so exported cookies fail in `curl_cffi`.

@@ -48,6 +48,8 @@ Production Chromium uses a persistent profile and exposes noVNC on loopback only
 Ubuntu 24.04 AppArmor blocks the downloaded Chromium user-namespace sandbox, so
 the launcher uses `--no-sandbox`; containment is provided by the dedicated `movie`
 account plus `NoNewPrivileges`, `ProtectSystem=strict`, and narrow writable paths.
+The bot host exits through the loopback SOCKS tunnel to `keeper@212.192.223.34`;
+the dedicated SSH key is restricted to port forwarding on that host.
 Forward it from an operator workstation:
 
 ```bash
