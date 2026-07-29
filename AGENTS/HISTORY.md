@@ -4,6 +4,12 @@ Newest first. Each entry ≤5 lines using the format defined in `AGENTS.md`.
 
 ---
 
+## 2026-07-29 · Commit rutracker-proxy.service into deploy/systemd
+- What: Added the SOCKS5-tunnel unit (host copy of `/etc/systemd/system/rutracker-proxy.service`) so `deploy/systemd/` is self-contained; `rutracker-browser.service` already `Requires=` it.
+- Why: The browser unit referenced a unit that existed only on the host; no secrets involved (key path only).
+- Files: `deploy/systemd/rutracker-proxy.service`, `AGENTS/{ENV,STATE,HISTORY}.md`.
+- Next: —
+
 ## 2026-07-29 · Deploy and authorize persistent browser backend
 - What: Deployed Chromium/Xvfb/noVNC/CDP, authenticated the profile, restricted the SSH key to forwarding, and live-tested all four tools.
 - Why: Complete the Cloudflare-compatible Rutracker recovery end to end.

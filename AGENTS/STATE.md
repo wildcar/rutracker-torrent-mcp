@@ -16,7 +16,8 @@ movie_handler bot, via authenticated HTML scraping.
   missing auth returns `manual_auth_required`.
 - Production runs commit `b33bb74` with loopback-only Xvfb/x11vnc/noVNC/CDP;
   the persistent profile is authenticated.
-- SOCKS5 egress through `212.192.223.34` is active on the bot host.
+- SOCKS5 egress through `212.192.223.34` is active on the bot host; its unit is
+  committed as `deploy/systemd/rutracker-proxy.service`.
 - All four tools are live-verified through the browser backend; `.torrent` download
   returned a valid 47,779-byte file.
 - Harness migrated to the `agent-template` layout.
