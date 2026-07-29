@@ -13,11 +13,15 @@ movie_handler bot, via authenticated HTML scraping.
   `get_magnet_link`, `get_topic_info`.
 - Protected GETs treat a login page or HTTP `401`/`403` as an expired session,
   refresh `bb_session` once under a lock, and retry exactly once.
-- Deployed on the bot host as a systemd unit, bound `127.0.0.1:8767`.
+- Fix commit `36db7df` is pushed; the bot-host checkout is still on `c559252`
+  because this session cannot elevate through sudo.
+- The previous build remains deployed as a systemd unit, bound `127.0.0.1:8767`.
 - Harness migrated to the `agent-template` layout.
 
 ## Next
 
+- Deploy `36db7df` on the bot host, restart `rutracker-torrent-mcp.service`, and
+  verify that a live search refreshes the stale cookie.
 - (when needed) Additional trackers under `clients/` (noname-club, kinozal).
 
 ## Open questions
