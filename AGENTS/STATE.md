@@ -21,10 +21,19 @@ movie_handler bot, via authenticated HTML scraping.
 - All four tools are live-verified through the browser backend; `.torrent` download
   returned a valid 47,779-byte file.
 - Harness migrated to the `agent-template` layout.
+- Cloudflare challenges are now reported separately from a logged-out session
+  (`cloudflare_challenge` vs `manual_auth_required`), keyed off the `cf-mitigated`
+  response header. Previously every Turnstile interstitial claimed the session
+  needed re-authentication, which was wrong and unactionable.
+- Tab leak closed: the client is an async context manager and reaps stranded
+  `about:blank` / challenge tabs on `open()`, never dropping below one tab.
 
 ## Next
 
-- Monitor session lifetime; use noVNC again when `manual_auth_required` is returned.
+- Monitor session lifetime; use noVNC when `manual_auth_required` (sign in) or
+  `cloudflare_challenge` (solve Turnstile) is returned.
+- `_parse_search` returns `size=None` for browser-backend rows — the tracker markup
+  likely drifted. Worth a look; not blocking, since seeders/title/topic_id are fine.
 - (when needed) Additional trackers under `clients/` (noname-club, kinozal).
 
 ## Open questions

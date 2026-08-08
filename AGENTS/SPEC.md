@@ -73,6 +73,18 @@ breadcrumb for forum id/name; best-effort size + upload date. Missing title →
   closes the tab. The profile survives MCP and host restarts.
 - A missing/expired Playwright browser session maps to
   `ToolError(code="manual_auth_required", …)`; automatic retries cannot solve it.
+- **Challenge ≠ logout.** Cloudflare gating and a logged-out session are separate
+  failures with separate codes. A response carrying `cf-mitigated: challenge` (or,
+  when headers are unreadable, the `Just a moment...` title) raises
+  `CloudflareChallenge` → `ToolError(code="cloudflare_challenge", …)`; only an
+  actual login form — or a `401`/`403` with no challenge marker — raises
+  `ManualLoginRequired` → `manual_auth_required`. The header is authoritative when
+  present. Both need noVNC, but the remedies differ: the challenge needs a Turnstile
+  solve while the session stays valid, so reporting it as "authentication required"
+  sends the operator after a problem that isn't there. Cloudflare challenges
+  `/forum/tracker.php` (search) independently of `index.php` / `viewtopic.php`,
+  so search can fail while the rest of the site loads fine and the account is
+  still signed in.
 
 - Login is `POST /forum/login.php` (rate-limited, captcha-prone). On success the
   client holds a `bb_session` cookie, persisted to `RUTRACKER_COOKIES_PATH` (default
@@ -87,9 +99,18 @@ breadcrumb for forum id/name; best-effort size + upload date. Missing title →
   which the tool layer maps to `ToolError(code="captcha_required", …)`. The captcha
   cannot be solved automatically — recovery is manual (see MEMORY).
 - Error taxonomy (`clients/rutracker.py`): `RutrackerError` (base), `LoginFailed`,
-  `LoginCaptchaRequired`, `NotAuthenticated`. `_auth_error()` in `tools.py` maps
-  these to `captcha_required` / `login_failed` / `not_configured`; other failures →
-  `upstream_error`.
+  `LoginCaptchaRequired`, `NotAuthenticated`, `ManualLoginRequired`,
+  `CloudflareChallenge`. `_auth_error()` in `tools.py` maps these to
+  `captcha_required` / `login_failed` / `not_configured` / `manual_auth_required` /
+  `cloudflare_challenge`; other failures → `upstream_error`.
+
+- **Tab hygiene (playwright backend):** the persistent profile outlives every MCP
+  process, so a client killed before `aclose()` strands its tab forever — stranded
+  challenge tabs are the expensive ones, since Turnstile scripts and blob workers
+  keep running. `PlaywrightRutrackerClient` is an async context manager (page closed
+  on every exit path), and `open()` reaps `about:blank` and challenge-stranded tabs
+  so restarts self-heal. Chromium exits with its last tab, so the reaper always
+  leaves one standing.
 
 ## Parsing notes (gotchas)
 

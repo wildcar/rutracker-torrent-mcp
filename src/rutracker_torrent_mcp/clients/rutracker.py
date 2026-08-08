@@ -46,7 +46,16 @@ class LoginCaptchaRequired(RutrackerError):
 
 
 class ManualLoginRequired(RutrackerError):
-    """The persistent browser needs operator interaction."""
+    """The persistent browser needs operator interaction to log in."""
+
+
+class CloudflareChallenge(RutrackerError):
+    """Cloudflare is serving an interactive challenge.
+
+    Distinct from :class:`ManualLoginRequired`: the rutracker login session may
+    be perfectly valid — Cloudflare is gating the request regardless. Telling the
+    operator to re-authenticate here sends them after a problem that isn't there.
+    """
 
 
 class NotAuthenticated(RutrackerError):
@@ -485,6 +494,7 @@ def _parse_disposition_filename(value: str) -> str:
 
 
 __all__ = [
+    "CloudflareChallenge",
     "LoginCaptchaRequired",
     "LoginFailed",
     "ManualLoginRequired",
