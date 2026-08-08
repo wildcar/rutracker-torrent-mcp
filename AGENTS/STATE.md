@@ -32,8 +32,6 @@ movie_handler bot, via authenticated HTML scraping.
 
 - Monitor session lifetime; use noVNC when `manual_auth_required` (sign in) or
   `cloudflare_challenge` (solve Turnstile) is returned.
-- `_parse_search` returns `size=None` for browser-backend rows — the tracker markup
-  likely drifted. Worth a look; not blocking, since seeders/title/topic_id are fine.
 - (when needed) Additional trackers under `clients/` (noname-club, kinozal).
 
 ## Open questions

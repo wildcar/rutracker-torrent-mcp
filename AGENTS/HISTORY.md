@@ -8,7 +8,7 @@ Newest first. Each entry ≤5 lines using the format defined in `AGENTS.md`.
 - What: New `CloudflareChallenge` → `cloudflare_challenge` code, keyed off the `cf-mitigated` header; `ManualLoginRequired` now means only a real logout. Client became an async context manager and reaps stranded `about:blank`/challenge tabs on `open()`.
 - Why: Search returned `manual_auth_required` while the session was valid (`logged_in_as=wildcar`, `index.php` 200) — Cloudflare was challenging `tracker.php` alone; the message sent the operator to a non-existent login problem. 11 tabs had leaked in prod, two burning CPU on stuck Turnstile.
 - Files: `src/rutracker_torrent_mcp/clients/{browser,rutracker}.py`, `src/rutracker_torrent_mcp/tools.py`, `tests/test_browser.py`, `AGENTS/{SPEC,STATE,HISTORY}.md`.
-- Next: `_parse_search` yields `size=None` on the browser backend — check markup drift.
+- Next: —
 
 ## 2026-07-29 · Commit rutracker-proxy.service into deploy/systemd
 - What: Added the SOCKS5-tunnel unit (host copy of `/etc/systemd/system/rutracker-proxy.service`) so `deploy/systemd/` is self-contained; `rutracker-browser.service` already `Requires=` it.
