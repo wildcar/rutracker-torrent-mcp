@@ -67,9 +67,14 @@ sudo systemctl stop rutracker-browser    # hand the profile back to the MCP
 ```
 
 Right after a `manual_auth_required` / `cloudflare_challenge` the MCP's own browser
-is still up (30 min grace) and visible over noVNC — the unit is only needed when
-that window has already lapsed. While the unit runs it holds the profile lock and
-the MCP attaches to it instead of launching its own, so stop it when done.
+is still up (30 min grace) and visible over noVNC — just use it; the unit is only
+needed once that window has lapsed. While the unit runs it holds the profile lock
+and the MCP attaches to it instead of launching its own, so stop it when done.
+
+Starting the unit while the MCP's browser is up is a no-op: Chromium sees the
+single-instance lock, logs `Opening in existing browser session` and exits, leaving
+the unit `inactive`. That's expected — the browser you want is already on the
+display.
 
 Production Chromium uses a persistent profile and exposes noVNC on loopback only.
 Ubuntu 24.04 AppArmor blocks the downloaded Chromium user-namespace sandbox, so

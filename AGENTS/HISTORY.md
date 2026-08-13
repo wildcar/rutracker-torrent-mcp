@@ -4,6 +4,12 @@ Newest first. Each entry ≤5 lines using the format defined in `AGENTS.md`.
 
 ---
 
+## 2026-08-13 · MCP owns Chromium: launch on demand, stop when idle
+- What: `launch_persistent_context` on the shared profile when `RUTRACKER_BROWSER_PROFILE` is set, closed after 5 min idle (30 min grace after an auth/challenge error); attach over CDP first so an operator's browser wins the profile lock. `rutracker-browser.service` demoted to a manual-login aid (no `[Install]`, `Restart=no`, disabled); MCP drop-in gains `DISPLAY`/profile/proxy env, `PrivateTmp=false` and the memory cap; MCP unit committed.
+- Why: The browser is only needed during a request — session + `cf_clearance` live in the profile — so an around-the-clock headful Chromium was the OOM risk and forced `Requires=` on a second unit.
+- Files: `src/rutracker_torrent_mcp/{clients/browser.py,config.py,context.py}`, `deploy/systemd/*`, `tests/test_browser.py`, `.env.example`, `README.md`, `AGENTS/{SPEC,ENV,STATE,HISTORY}.md`.
+- Next: —
+
 ## 2026-08-13 · Deploy the OOM fixes to the bot host
 - What: `370c14a` live on `r1117636`: unit copied to `/etc/systemd/system`, `daemon-reload`, browser + MCP restarted. Verified 1 tab before/after a browser restart (was 3), `MemoryMax=1G` on the cgroup, live search + 13 KB `.torrent` through `127.0.0.1:8767`, and reconnect after a browser restart with the MCP untouched.
 - Why: The 18:24 OOM fixes are only worth anything on the host.

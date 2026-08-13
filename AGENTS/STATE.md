@@ -11,7 +11,11 @@ movie_handler bot, via authenticated HTML scraping.
 
 - Four tools live and tested: `search_torrents`, `get_torrent_file`,
   `get_magnet_link`, `get_topic_info`.
-- Selectable `curl` and persistent Playwright/CDP backends are implemented.
+- Selectable `curl` and persistent Playwright backends are implemented.
+- The MCP owns Chromium: it launches the browser on the shared profile at the first
+  tool call and stops it after 5 min idle, so nothing runs between searches. An
+  operator-started `rutracker-browser.service` (manual login only, not enabled) wins
+  the profile lock and is attached to over CDP instead, never shut down by us.
 - Playwright mode keeps all protected requests inside one headful Chromium profile;
   missing auth returns `manual_auth_required`.
 - Production runs commit `370c14a` with loopback-only Xvfb/x11vnc/noVNC/CDP;
@@ -49,10 +53,4 @@ movie_handler bot, via authenticated HTML scraping.
 
 ## Deferred
 
-- **Let the MCP own Chromium** via `launch_persistent_context` on the same profile,
-  started on demand and stopped when idle. The browser is only needed during a
-  search — the session and `cf_clearance` live in the on-disk profile (cookies valid
-  into 2027). That would retire `rutracker-browser.service` and the `Requires=`, and
-  remove the orphaned-tab class entirely. Caveat: manual login on
-  `ManualLoginRequired` goes through VNC and needs a live browser, so keep the unit
-  around for manual starts.
+- —
