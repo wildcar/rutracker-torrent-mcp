@@ -14,15 +14,18 @@ browser=$(
   exit 1
 }
 
+# No startup URL: the MCP adopts whichever tab is already open, and every extra
+# argument here is one more tab per restart.
 exec "$browser" \
   --disable-dev-shm-usage \
   --no-sandbox \
   --no-first-run \
   --no-default-browser-check \
+  --disable-session-crashed-bubble \
+  --hide-crash-restore-bubble \
   --remote-debugging-address=127.0.0.1 \
   --remote-debugging-port=9222 \
   --remote-allow-origins='*' \
   --user-data-dir="$RUTRACKER_BROWSER_PROFILE" \
   --proxy-server=socks5://127.0.0.1:1080 \
-  --window-size=1440,900 \
-  https://rutracker.org/forum/index.php
+  --window-size=1440,900

@@ -36,6 +36,7 @@ def _configure_logging() -> None:
         processors=[
             structlog.processors.add_log_level,
             structlog.processors.TimeStamper(fmt="iso", utc=True),
+            structlog.processors.format_exc_info,
             structlog.processors.JSONRenderer(),
         ],
         logger_factory=structlog.PrintLoggerFactory(file=sys.stderr),
@@ -106,7 +107,20 @@ def main() -> None:
             f"Unsupported MCP_TRANSPORT={transport!r}; "
             f"expected one of {sorted(_SUPPORTED_TRANSPORTS)}"
         )
-    asyncio.run(_run(get_settings(), transport))
+    try:
+        asyncio.run(_run(get_settings(), transport))
+    except KeyboardInterrupt:
+        return
+    except BaseException:
+        # A fatal error must kill the process: on 2026-08-13 startup died with a
+        # traceback yet the process stayed alive, holding no port, while systemd
+        # still saw `active (running)` and never restarted it. Playwright's driver
+        # keeps non-daemon threads and a subprocess around, so a plain exit can
+        # hang; `os._exit` guarantees the non-zero status `Restart=on-failure`
+        # needs.
+        structlog.get_logger().exception("rutracker_mcp.fatal")
+        sys.stderr.flush()
+        os._exit(1)
 
 
 if __name__ == "__main__":

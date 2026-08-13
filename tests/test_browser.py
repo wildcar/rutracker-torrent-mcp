@@ -8,11 +8,13 @@ import pytest
 
 from rutracker_torrent_mcp.clients.browser import (
     PlaywrightRutrackerClient,
+    _adopt_working_page,
     _reap_stranded_pages,
 )
 from rutracker_torrent_mcp.clients.rutracker import (
     CloudflareChallenge,
     ManualLoginRequired,
+    RutrackerError,
 )
 
 
@@ -62,6 +64,9 @@ class FakePage:
 
     async def close(self) -> None:
         self.closed = True
+
+    def is_closed(self) -> bool:
+        return self.closed
 
 
 async def test_browser_search_uses_persistent_page(search_html: str) -> None:
@@ -172,12 +177,20 @@ async def test_browser_download_stays_inside_page_context() -> None:
 class FakeContext:
     def __init__(self, pages: list[FakePage]) -> None:
         self.pages = pages
+        self.opened = 0
+
+    async def new_page(self) -> FakePage:
+        self.opened += 1
+        page = FakePage(html="", url="about:blank", title="")
+        self.pages.append(page)
+        return page
 
     def alive(self) -> list[FakePage]:
         return [p for p in self.pages if not p.closed]
 
 
-async def test_reaper_closes_stranded_challenge_and_blank_tabs() -> None:
+async def test_reaper_closes_every_tab_but_the_working_one() -> None:
+    """Loaded rutracker tabs are as costly as challenge tabs — only one survives."""
     keep = FakePage(html="", url="https://rutracker.org/forum/index.php")
     topic = FakePage(html="", url="https://rutracker.org/forum/viewtopic.php?t=1")
     blank = FakePage(html="", url="about:blank", title="")
@@ -188,32 +201,36 @@ async def test_reaper_closes_stranded_challenge_and_blank_tabs() -> None:
     )
     ctx = FakeContext([keep, topic, blank, stuck])
 
-    await _reap_stranded_pages(ctx)
+    await _reap_stranded_pages(ctx, keep=keep)
 
-    assert blank.closed and stuck.closed
-    assert not keep.closed and not topic.closed
-
-
-async def test_reaper_never_closes_the_last_tab() -> None:
-    """Chromium exits with its last tab — the persistent browser must survive."""
-    only = FakePage(html="", url="about:blank", title="")
-    ctx = FakeContext([only])
-
-    await _reap_stranded_pages(ctx)
-
-    assert not only.closed
+    assert ctx.alive() == [keep]
 
 
-async def test_reaper_leaves_one_tab_when_all_are_stranded() -> None:
-    pages = [FakePage(html="", url="about:blank", title="") for _ in range(4)]
-    ctx = FakeContext(pages)
+async def test_adopt_reuses_the_open_tab() -> None:
+    """No new tab per process — that is what bounds the tab count."""
+    first = FakePage(html="", url="https://rutracker.org/forum/index.php")
+    extra = FakePage(html="", url="about:blank", title="")
+    ctx = FakeContext([first, extra])
 
-    await _reap_stranded_pages(ctx)
+    page, created = await _adopt_working_page(ctx)
 
-    assert len(ctx.alive()) == 1
+    assert page is first
+    assert created is False
+    assert ctx.opened == 0
+    assert ctx.alive() == [first]
 
 
-async def test_client_context_manager_closes_page_on_error() -> None:
+async def test_adopt_opens_a_tab_only_when_none_exists() -> None:
+    ctx = FakeContext([])
+
+    page, created = await _adopt_working_page(ctx)
+
+    assert created is True
+    assert ctx.alive() == [page]
+
+
+async def test_client_leaves_the_adopted_tab_open() -> None:
+    """A tab we did not open is not ours to close — the browser keeps it."""
     page = FakePage(html="<html></html>", title="Just a moment...", status=403)
     client = PlaywrightRutrackerClient(
         base_url="https://rutracker.org",
@@ -225,4 +242,56 @@ async def test_client_context_manager_closes_page_on_error() -> None:
         async with client:
             await client.search("Dune")
 
-    assert page.closed
+    assert not page.closed
+
+
+async def test_connect_retries_then_gives_up(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = PlaywrightRutrackerClient(
+        base_url="https://rutracker.org",
+        cdp_url="http://127.0.0.1:9222",
+        connect_attempts=3,
+        connect_backoff=0.0,
+    )
+    attempts = 0
+
+    async def failing_connect() -> None:
+        nonlocal attempts
+        attempts += 1
+        raise OSError("connection refused")
+
+    monkeypatch.setattr(client, "_connect_once", failing_connect)
+
+    with pytest.raises(RutrackerError, match="cannot reach the persistent Chromium"):
+        await client.search("Dune")
+
+    assert attempts == 3
+
+
+async def test_connect_is_lazy_and_recovers_on_a_later_call(
+    monkeypatch: pytest.MonkeyPatch, search_html: str
+) -> None:
+    """`open()` must not touch the browser; the first tool call connects."""
+    client = PlaywrightRutrackerClient(
+        base_url="https://rutracker.org",
+        cdp_url="http://127.0.0.1:9222",
+        connect_attempts=1,
+        connect_backoff=0.0,
+    )
+    attempts = 0
+
+    async def flaky_connect() -> None:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise OSError("browser not up yet")
+        client._page = FakePage(html=search_html)
+
+    monkeypatch.setattr(client, "_connect_once", flaky_connect)
+
+    await client.open()
+    assert attempts == 0
+
+    with pytest.raises(RutrackerError):
+        await client.search("Dune")
+
+    assert len(await client.search("Dune", limit=1)) == 1

@@ -46,6 +46,10 @@ Then open `http://127.0.0.1:6080/vnc.html?autoconnect=1&resize=scale`. The Chrom
 profile survives service and host restarts. A session requiring operator action
 returns `manual_auth_required`.
 
+MCP connects to that Chromium on the first tool call (with retries), works inside
+the tab that is already open, and closes any other tab it finds — the browser is
+never allowed to accumulate tabs, which once OOMed the host.
+
 rutracker sometimes responds to a fresh login with a captcha. The tool layer
 translates that into a structured error:
 
@@ -76,6 +80,9 @@ and never loops.
 | `RUTRACKER_BASE_URL` |  | `https://rutracker.org` | Override to a mirror if needed. |
 | `RUTRACKER_BACKEND` |  | `curl` | `curl` or persistent `playwright`. |
 | `RUTRACKER_BROWSER_CDP_URL` |  | `http://127.0.0.1:9222` | Persistent Chromium CDP endpoint. |
+| `RUTRACKER_BROWSER_CONNECT_TIMEOUT_SECONDS` |  | `10` | Per-attempt CDP connect timeout. |
+| `RUTRACKER_BROWSER_CONNECT_ATTEMPTS` |  | `3` | CDP connect attempts per tool call. |
+| `RUTRACKER_BROWSER_CONNECT_BACKOFF_SECONDS` |  | `2` | Backoff before the retry; doubles. |
 | `MCP_AUTH_TOKEN` | for HTTP | — | Bearer token shared with the bot. |
 | `MCP_TRANSPORT` |  | `stdio` | One of `stdio`, `sse`, `streamable-http`. |
 | `MCP_HTTP_HOST` |  | `127.0.0.1` | Bind host for HTTP transports. |

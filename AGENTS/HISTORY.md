@@ -4,6 +4,12 @@ Newest first. Each entry ≤5 lines using the format defined in `AGENTS.md`.
 
 ---
 
+## 2026-08-13 · Bound Chromium: adopt one tab, lazy connect, memory cap
+- What: Client adopts `context.pages[0]` (closes it only if it created it); reaper closes every tab but the working one; CDP connect moved to first tool call with retries/backoff; fatal startup errors `os._exit(1)`; browser unit gets `MemoryHigh/MemoryMax` + a session-restore wipe in `ExecStartPre`, launcher drops its startup URL.
+- Why: 18:24 the host OOMed on 50 tabs in the persistent Chromium; the MCP then died at 18:25:50 on a 30 s `connect_over_cdp` timeout but stayed alive with no listening port, so systemd reported `active (running)` and never restarted it.
+- Files: `src/rutracker_torrent_mcp/{clients/browser.py,config.py,context.py,server.py}`, `deploy/{run-browser.sh,reset-browser-profile.sh,systemd/rutracker-browser.service}`, `tests/test_browser.py`, `.env.example`, `AGENTS/{SPEC,ENV,STATE,HISTORY}.md`.
+- Next: Deploy on the bot host; consider letting the MCP own Chromium via `launch_persistent_context` (STATE → Deferred).
+
 ## 2026-08-08 · Split Cloudflare challenge from logout; fix tab leak
 - What: New `CloudflareChallenge` → `cloudflare_challenge` code, keyed off the `cf-mitigated` header; `ManualLoginRequired` now means only a real logout. Client became an async context manager and reaps stranded `about:blank`/challenge tabs on `open()`.
 - Why: Search returned `manual_auth_required` while the session was valid (`logged_in_as=wildcar`, `index.php` 200) — Cloudflare was challenging `tracker.php` alone; the message sent the operator to a non-existent login problem. 11 tabs had leaked in prod, two burning CPU on stuck Turnstile.

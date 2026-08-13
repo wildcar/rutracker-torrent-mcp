@@ -45,6 +45,9 @@ async def build_app_context(settings: Settings) -> AsyncIterator[AppContext]:
         client = PlaywrightRutrackerClient(
             base_url=settings.rutracker_base_url,
             cdp_url=settings.rutracker_browser_cdp_url,
+            connect_timeout=settings.rutracker_browser_connect_timeout_seconds,
+            connect_attempts=settings.rutracker_browser_connect_attempts,
+            connect_backoff=settings.rutracker_browser_connect_backoff_seconds,
         )
     else:
         client = RutrackerClient(
@@ -54,6 +57,8 @@ async def build_app_context(settings: Settings) -> AsyncIterator[AppContext]:
             cookies_path=settings.rutracker_cookies_path,
             proxy_url=settings.rutracker_proxy_url,
         )
+    # Cheap for both backends: the browser client connects over CDP lazily, so
+    # startup never depends on Chromium already being up.
     await client.open()
     try:
         yield AppContext(settings=settings, cache=cache, rutracker=client)

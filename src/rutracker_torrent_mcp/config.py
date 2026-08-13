@@ -20,6 +20,9 @@ class Settings(BaseSettings):
     rutracker_base_url: str = "https://rutracker.org"
     rutracker_backend: Literal["curl", "playwright"] = "curl"
     rutracker_browser_cdp_url: str = "http://127.0.0.1:9222"
+    rutracker_browser_connect_timeout_seconds: float = 10.0
+    rutracker_browser_connect_attempts: int = 3
+    rutracker_browser_connect_backoff_seconds: float = 2.0
 
     mcp_auth_token: str | None = None
     cache_path: Path = Field(Path(".cache/rutracker.sqlite"))

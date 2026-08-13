@@ -21,6 +21,9 @@ Bot host (`homesrv`), systemd unit under user `movie`, bound to `127.0.0.1:8767`
 | `RUTRACKER_BASE_URL` |  | `https://rutracker.org` | Override to a mirror (`.net`/`.nl`) only as a fallback. |
 | `RUTRACKER_BACKEND` |  | `curl` | `curl` or persistent `playwright` browser backend. |
 | `RUTRACKER_BROWSER_CDP_URL` |  | `http://127.0.0.1:9222` | CDP endpoint used by the Playwright backend. |
+| `RUTRACKER_BROWSER_CONNECT_TIMEOUT_SECONDS` |  | `10` | Per-attempt CDP connect timeout (connect is lazy, on first tool call). |
+| `RUTRACKER_BROWSER_CONNECT_ATTEMPTS` |  | `3` | CDP connect attempts before the call fails. |
+| `RUTRACKER_BROWSER_CONNECT_BACKOFF_SECONDS` |  | `2` | Delay before the 2nd attempt; doubles each retry. |
 | `MCP_AUTH_TOKEN` | for HTTP | — | Bearer token shared with the bot. |
 | `MCP_TRANSPORT` |  | `stdio` | `stdio` \| `sse` \| `streamable-http`. |
 | `MCP_HTTP_HOST` |  | `127.0.0.1` | Bind host for HTTP transports. |

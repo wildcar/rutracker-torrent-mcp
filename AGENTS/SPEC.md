@@ -105,12 +105,24 @@ breadcrumb for forum id/name; best-effort size + upload date. Missing title →
   `cloudflare_challenge`; other failures → `upstream_error`.
 
 - **Tab hygiene (playwright backend):** the persistent profile outlives every MCP
-  process, so a client killed before `aclose()` strands its tab forever — stranded
-  challenge tabs are the expensive ones, since Turnstile scripts and blob workers
-  keep running. `PlaywrightRutrackerClient` is an async context manager (page closed
-  on every exit path), and `open()` reaps `about:blank` and challenge-stranded tabs
-  so restarts self-heal. Chromium exits with its last tab, so the reaper always
-  leaves one standing.
+  process, so tabs left by earlier runs accumulate until the host OOMs (2026-08-13:
+  50 tabs, 3.8 GiB host). Two rules bound the count. (1) The client **adopts**
+  `context.pages[0]` instead of opening its own tab, and closes it on `aclose()`
+  only when it had to create one — a process killed mid-flight can no longer strand
+  anything. (2) On connect the reaper closes **every** tab except the working one;
+  the old rule (only `about:blank` and `Just a moment...`) never collected loaded
+  rutracker pages. Chromium exits with its last tab, so the kept page is always one
+  of the context's own.
+- **Lazy CDP connect (playwright backend):** the client connects on the first tool
+  call, not at startup — `open()` is a no-op. Connect failures retry
+  `RUTRACKER_BROWSER_CONNECT_ATTEMPTS` times with an exponential backoff and then
+  surface as `upstream_error`; the next call tries again, and a closed working tab
+  (browser restarted) reconnects transparently. Startup therefore no longer depends
+  on Chromium already running.
+- **Fatal startup errors kill the process.** `main()` catches anything escaping
+  `asyncio.run` and exits non-zero via `os._exit(1)` (Playwright's driver keeps
+  non-daemon threads alive, so a plain return can leave a live process that holds no
+  port while systemd still reports `active (running)`).
 
 ## Parsing notes (gotchas)
 

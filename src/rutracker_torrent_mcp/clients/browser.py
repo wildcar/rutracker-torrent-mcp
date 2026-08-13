@@ -44,36 +44,32 @@ class PlaywrightRutrackerClient:
         base_url: str,
         cdp_url: str,
         timeout: float = 30.0,
+        connect_timeout: float = 10.0,
+        connect_attempts: int = 3,
+        connect_backoff: float = 2.0,
         page: Any = None,
     ) -> None:
         self._base = base_url.rstrip("/")
         self._cdp_url = cdp_url
         self._timeout_ms = int(timeout * 1000)
+        self._connect_timeout_ms = int(connect_timeout * 1000)
+        self._connect_attempts = max(1, connect_attempts)
+        self._connect_backoff = connect_backoff
         self._playwright: Any = None
         self._browser: Any = None
         self._page: Any = page
+        self._owns_page = False
         self._request_lock = asyncio.Lock()
+        self._connect_lock = asyncio.Lock()
 
     async def open(self) -> None:
-        if self._page is not None:
-            return
-        from playwright.async_api import async_playwright
+        """No-op: the CDP connection is established on first tool call.
 
-        self._playwright = await async_playwright().start()
-        try:
-            self._browser = await self._playwright.chromium.connect_over_cdp(
-                self._cdp_url,
-                timeout=self._timeout_ms,
-            )
-            if not self._browser.contexts:
-                raise RutrackerError("persistent Chromium has no browser context")
-            context = self._browser.contexts[0]
-            await _reap_stranded_pages(context)
-            self._page = await context.new_page()
-        except Exception:
-            await self._playwright.stop()
-            self._playwright = None
-            raise
+        Connecting eagerly made server startup depend on a browser that had to be
+        up first — a browser restart then left the MCP wedged until it was
+        restarted too. See ``_ensure_page``.
+        """
+        return None
 
     async def __aenter__(self) -> PlaywrightRutrackerClient:
         await self.open()
@@ -83,15 +79,65 @@ class PlaywrightRutrackerClient:
         await self.aclose()
 
     async def aclose(self) -> None:
-        if self._page is not None:
+        await self._detach()
+
+    async def _ensure_page(self) -> Any:
+        """Return a live working tab, connecting to Chromium if needed."""
+        if self._page is not None and not _page_is_closed(self._page):
+            return self._page
+        async with self._connect_lock:
+            if self._page is not None and not _page_is_closed(self._page):
+                return self._page
+            await self._detach()
+            await self._connect()
+            return self._page
+
+    async def _connect(self) -> None:
+        delay = self._connect_backoff
+        last_error: Exception | None = None
+        for attempt in range(1, self._connect_attempts + 1):
             try:
-                await self._page.close()
+                await self._connect_once()
+                return
+            except Exception as exc:
+                last_error = exc
+                await self._detach()
+                if attempt < self._connect_attempts:
+                    await asyncio.sleep(delay)
+                    delay *= 2
+        raise RutrackerError(
+            f"cannot reach the persistent Chromium at {self._cdp_url}: {last_error}"
+        )
+
+    async def _connect_once(self) -> None:
+        from playwright.async_api import async_playwright
+
+        self._playwright = await async_playwright().start()
+        self._browser = await self._playwright.chromium.connect_over_cdp(
+            self._cdp_url,
+            timeout=self._connect_timeout_ms,
+        )
+        if not self._browser.contexts:
+            raise RutrackerError("persistent Chromium has no browser context")
+        context = self._browser.contexts[0]
+        self._page, self._owns_page = await _adopt_working_page(context)
+
+    async def _detach(self) -> None:
+        page, owns = self._page, self._owns_page
+        self._page = None
+        self._owns_page = False
+        if page is not None and owns:
+            try:
+                await page.close()
             except Exception:
                 pass
-        self._page = None
         self._browser = None
         if self._playwright is not None:
-            await self._playwright.stop()
+            try:
+                # A driver left over from a timed-out connect can hang on stop().
+                await asyncio.wait_for(self._playwright.stop(), timeout=5.0)
+            except Exception:
+                pass
             self._playwright = None
 
     async def search(
@@ -110,9 +156,9 @@ class PlaywrightRutrackerClient:
     async def download_torrent(self, topic_id: int) -> tuple[str, bytes]:
         async with self._request_lock:
             await self._navigate_html_locked("/forum/viewtopic.php", params={"t": topic_id})
-            assert self._page is not None
+            page = await self._ensure_page()
             url = self._url("/forum/dl.php", {"t": topic_id})
-            result = await self._page.evaluate(_FETCH_SCRIPT, {"url": url})
+            result = await page.evaluate(_FETCH_SCRIPT, {"url": url})
             status = int(result["status"])
             headers = {str(k).lower(): str(v) for k, v in result["headers"].items()}
             if _is_cloudflare_challenge("", headers):
@@ -156,17 +202,19 @@ class PlaywrightRutrackerClient:
         *,
         params: dict[str, Any] | None = None,
     ) -> str:
-        if self._page is None:
-            raise RutrackerError("PlaywrightRutrackerClient.open() must be awaited before use")
+        page = await self._ensure_page()
         try:
-            response = await self._page.goto(
+            response = await page.goto(
                 self._url(path, params),
                 wait_until="domcontentloaded",
                 timeout=self._timeout_ms,
             )
-            html = await self._page.content()
-            title = await self._page.title()
+            html = await page.content()
+            title = await page.title()
         except Exception as exc:
+            # Drop the CDP connection: a browser that died mid-navigation leaves a
+            # handle that never recovers. The next call reconnects and re-reaps.
+            await self._detach()
             raise RutrackerError(f"browser navigation failed for {path}: {exc}") from exc
         status = response.status if response is not None else 200
         headers = await _response_headers(response)
@@ -226,31 +274,48 @@ async def _response_headers(response: Any) -> dict[str, str]:
     return {str(k).lower(): str(v) for k, v in raw.items()}
 
 
-async def _reap_stranded_pages(context: Any) -> None:
-    """Close tabs orphaned by an earlier process.
+def _page_is_closed(page: Any) -> bool:
+    checker = getattr(page, "is_closed", None)
+    if checker is None:
+        return False
+    try:
+        return bool(checker())
+    except Exception:
+        return True
 
-    The persistent profile outlives every server process, so a client killed
-    before ``aclose()`` leaves its tab behind forever. Challenge tabs are the
-    costly ones — their Turnstile scripts and blob workers keep running. Chromium
-    exits when its last tab closes, so always leave one standing.
+
+async def _adopt_working_page(context: Any) -> tuple[Any, bool]:
+    """Pick the tab to work in; returns ``(page, created_by_us)``.
+
+    Reusing the tab that is already open is what bounds the tab count: a process
+    killed before ``aclose()`` can no longer strand the tab it opened, because it
+    never opened one.
     """
     pages = list(getattr(context, "pages", None) or [])
-    remaining = len(pages)
-    for page in pages:
-        if remaining <= 1:
-            return
-        try:
-            url = page.url
-            title = (await page.title()).strip().lower()
-        except Exception:
-            continue
-        if url != "about:blank" and title != _CHALLENGE_TITLE:
+    if pages:
+        page, created = pages[0], False
+    else:
+        page, created = await context.new_page(), True
+    await _reap_stranded_pages(context, keep=page)
+    return page, created
+
+
+async def _reap_stranded_pages(context: Any, *, keep: Any) -> None:
+    """Close every tab except the working one.
+
+    The persistent profile outlives every server process, so tabs left by earlier
+    runs — or by a session restore after a SIGTERM — accumulate until the host
+    runs out of memory. Loaded rutracker pages are as costly as challenge tabs, so
+    the rule is by exclusion: one tab survives, everything else goes. ``keep``
+    belongs to ``context``, so Chromium never loses its last tab and stays up.
+    """
+    for page in list(getattr(context, "pages", None) or []):
+        if page is keep:
             continue
         try:
             await page.close()
         except Exception:
             continue
-        remaining -= 1
 
 
 __all__ = ["PlaywrightRutrackerClient"]
