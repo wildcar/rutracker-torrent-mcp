@@ -48,6 +48,11 @@ async def build_app_context(settings: Settings) -> AsyncIterator[AppContext]:
             connect_timeout=settings.rutracker_browser_connect_timeout_seconds,
             connect_attempts=settings.rutracker_browser_connect_attempts,
             connect_backoff=settings.rutracker_browser_connect_backoff_seconds,
+            profile_dir=settings.rutracker_browser_profile,
+            executable_path=settings.rutracker_browser_executable_path,
+            browser_proxy=settings.rutracker_browser_proxy_url,
+            idle_timeout=settings.rutracker_browser_idle_timeout_seconds,
+            manual_login_grace=settings.rutracker_browser_manual_login_grace_seconds,
         )
     else:
         client = RutrackerClient(

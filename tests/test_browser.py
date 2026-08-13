@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import base64
+import json
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -9,6 +12,7 @@ import pytest
 from rutracker_torrent_mcp.clients.browser import (
     PlaywrightRutrackerClient,
     _adopt_working_page,
+    _clear_session_restore,
     _reap_stranded_pages,
 )
 from rutracker_torrent_mcp.clients.rutracker import (
@@ -243,6 +247,131 @@ async def test_client_leaves_the_adopted_tab_open() -> None:
             await client.search("Dune")
 
     assert not page.closed
+
+
+class FakeLaunchedContext(FakeContext):
+    def __init__(self, pages: list[FakePage]) -> None:
+        super().__init__(pages)
+        self.context_closed = False
+
+    async def close(self) -> None:
+        self.context_closed = True
+        for page in self.pages:
+            page.closed = True
+
+
+def _launching_client(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    idle_timeout: float,
+    html: str = "<html></html>",
+    title: str = "RuTracker.org",
+    status: int = 200,
+) -> tuple[PlaywrightRutrackerClient, list[FakeLaunchedContext]]:
+    """A client whose `_connect_once` stands in for launch_persistent_context."""
+    client = PlaywrightRutrackerClient(
+        base_url="https://rutracker.org",
+        cdp_url="http://127.0.0.1:9222",
+        profile_dir=Path("/nonexistent/profile"),
+        idle_timeout=idle_timeout,
+        manual_login_grace=60.0,
+        connect_attempts=1,
+        connect_backoff=0.0,
+    )
+    launched: list[FakeLaunchedContext] = []
+
+    async def fake_connect() -> None:
+        page = FakePage(html=html, title=title, status=status)
+        ctx = FakeLaunchedContext([page])
+        launched.append(ctx)
+        client._launched = ctx
+        client._page = page
+
+    monkeypatch.setattr(client, "_connect_once", fake_connect)
+    return client, launched
+
+
+async def test_idle_browser_is_shut_down(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Nothing should run between searches — the profile keeps the session."""
+    client, launched = _launching_client(monkeypatch, idle_timeout=0.05)
+
+    await client.topic_info(1)
+    assert launched[0].context_closed is False
+
+    await asyncio.sleep(0.2)
+    assert launched[0].context_closed is True
+    assert client._launched is None
+
+
+async def test_next_call_relaunches_after_an_idle_shutdown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, launched = _launching_client(monkeypatch, idle_timeout=0.05)
+
+    await client.topic_info(1)
+    await asyncio.sleep(0.2)
+    await client.topic_info(1)
+
+    assert len(launched) == 2
+    assert launched[1].context_closed is False
+    await client.aclose()
+
+
+async def test_manual_login_keeps_the_browser_up_for_the_operator(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The operator is sent to noVNC; don't close the window under them."""
+    client, launched = _launching_client(
+        monkeypatch,
+        idle_timeout=0.05,
+        html='<html><form><input name="login_username"><input name="login_password"></form></html>',
+    )
+
+    with pytest.raises(ManualLoginRequired):
+        await client.search("Dune")
+
+    await asyncio.sleep(0.2)
+    assert launched[0].context_closed is False
+    await client.aclose()
+
+
+async def test_attached_browser_is_never_shut_down(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A browser we merely attached to belongs to the operator, not to us."""
+    page = FakePage(html="<html></html>")
+    client = PlaywrightRutrackerClient(
+        base_url="https://rutracker.org",
+        cdp_url="http://127.0.0.1:9222",
+        profile_dir=Path("/nonexistent/profile"),
+        idle_timeout=0.05,
+        connect_attempts=1,
+        connect_backoff=0.0,
+    )
+
+    async def fake_connect() -> None:
+        client._page = page  # attached over CDP: `_launched` stays None
+
+    monkeypatch.setattr(client, "_connect_once", fake_connect)
+
+    await client.topic_info(1)
+    await asyncio.sleep(0.2)
+
+    assert not page.closed
+    assert client._idle_task is None
+
+
+async def test_clear_session_restore_drops_crash_state(tmp_path: Path) -> None:
+    default = tmp_path / "Default"
+    (default / "Sessions").mkdir(parents=True)
+    (default / "Sessions" / "Session_1").write_text("x")
+    (default / "Preferences").write_text(
+        '{"profile":{"exit_type":"Crashed","exited_cleanly":false}}'
+    )
+
+    _clear_session_restore(tmp_path)
+
+    assert not (default / "Sessions").exists()
+    prefs = json.loads((default / "Preferences").read_text())["profile"]
+    assert prefs == {"exit_type": "Normal", "exited_cleanly": True}
 
 
 async def test_connect_retries_then_gives_up(monkeypatch: pytest.MonkeyPatch) -> None:

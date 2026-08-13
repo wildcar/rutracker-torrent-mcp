@@ -23,6 +23,13 @@ class Settings(BaseSettings):
     rutracker_browser_connect_timeout_seconds: float = 10.0
     rutracker_browser_connect_attempts: int = 3
     rutracker_browser_connect_backoff_seconds: float = 2.0
+    # Set the profile to let the MCP launch Chromium itself and stop it when idle;
+    # leave it unset to only attach to an externally managed browser over CDP.
+    rutracker_browser_profile: Path | None = None
+    rutracker_browser_executable_path: str | None = None
+    rutracker_browser_proxy_url: str | None = None
+    rutracker_browser_idle_timeout_seconds: float = 300.0
+    rutracker_browser_manual_login_grace_seconds: float = 1800.0
 
     mcp_auth_token: str | None = None
     cache_path: Path = Field(Path(".cache/rutracker.sqlite"))

@@ -113,6 +113,21 @@ breadcrumb for forum id/name; best-effort size + upload date. Missing title →
   the old rule (only `about:blank` and `Just a moment...`) never collected loaded
   rutracker pages. Chromium exits with its last tab, so the kept page is always one
   of the context's own.
+- **The MCP owns Chromium (playwright backend).** With `RUTRACKER_BROWSER_PROFILE`
+  set, the client launches Chromium itself (`launch_persistent_context` on that
+  profile) at the first tool call and closes it after
+  `RUTRACKER_BROWSER_IDLE_TIMEOUT_SECONDS` of inactivity — nothing runs between
+  searches, and the session plus `cf_clearance` survive in the on-disk profile.
+  Order of preference on connect: **attach** to a browser already listening on
+  `RUTRACKER_BROWSER_CDP_URL` (the operator started `rutracker-browser.service` to
+  sign in through VNC — the profile takes one process at a time), otherwise
+  **launch** our own. A browser we merely attached to is never closed by the idle
+  timer; only a browser we launched is. Leave the profile unset to get the old
+  attach-only behaviour.
+- **Operator grace.** `ManualLoginRequired` / `CloudflareChallenge` push the idle
+  deadline out to `RUTRACKER_BROWSER_MANUAL_LOGIN_GRACE_SECONDS`, so the window the
+  operator is sent to over noVNC does not vanish mid-fix. If it did lapse, starting
+  `rutracker-browser.service` by hand gives a browser the MCP will attach to.
 - **Lazy CDP connect (playwright backend):** the client connects on the first tool
   call, not at startup — `open()` is a no-op. Connect failures retry
   `RUTRACKER_BROWSER_CONNECT_ATTEMPTS` times with an exponential backoff and then

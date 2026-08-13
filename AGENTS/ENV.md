@@ -24,6 +24,16 @@ Bot host (`homesrv`), systemd unit under user `movie`, bound to `127.0.0.1:8767`
 | `RUTRACKER_BROWSER_CONNECT_TIMEOUT_SECONDS` |  | `10` | Per-attempt CDP connect timeout (connect is lazy, on first tool call). |
 | `RUTRACKER_BROWSER_CONNECT_ATTEMPTS` |  | `3` | CDP connect attempts before the call fails. |
 | `RUTRACKER_BROWSER_CONNECT_BACKOFF_SECONDS` |  | `2` | Delay before the 2nd attempt; doubles each retry. |
+| `RUTRACKER_BROWSER_PROFILE` |  | — | Chromium profile dir. Set ⇒ the MCP launches the browser itself and stops it when idle. Unset ⇒ attach-only over CDP. |
+| `RUTRACKER_BROWSER_EXECUTABLE_PATH` |  | — | Chromium binary; default resolves through `PLAYWRIGHT_BROWSERS_PATH`. |
+| `RUTRACKER_BROWSER_PROXY_URL` |  | — | Proxy for the launched browser (prod: `socks5://127.0.0.1:1080`). |
+| `RUTRACKER_BROWSER_IDLE_TIMEOUT_SECONDS` |  | `300` | Idle time before a self-launched browser is shut down. |
+| `RUTRACKER_BROWSER_MANUAL_LOGIN_GRACE_SECONDS` |  | `1800` | Keep-alive after `manual_auth_required` / `cloudflare_challenge`, so the operator can fix it over noVNC. |
+
+Production also needs `DISPLAY=:99`, `HOME=/var/lib/rutracker-browser/home` and
+`PLAYWRIGHT_BROWSERS_PATH=/var/lib/rutracker-browser/playwright` in the MCP unit —
+all set by `deploy/systemd/rutracker-torrent-mcp-playwright.conf`, which also turns
+`PrivateTmp` off (Xvfb's socket lives in the host `/tmp`).
 | `MCP_AUTH_TOKEN` | for HTTP | — | Bearer token shared with the bot. |
 | `MCP_TRANSPORT` |  | `stdio` | `stdio` \| `sse` \| `streamable-http`. |
 | `MCP_HTTP_HOST` |  | `127.0.0.1` | Bind host for HTTP transports. |
@@ -46,6 +56,20 @@ npx @modelcontextprotocol/inspector uv run python -m rutracker_torrent_mcp.serve
 ```
 
 ## Manual browser login
+
+The MCP starts Chromium on demand and stops it when idle, so most of the time no
+browser is running. To sign in or solve a Turnstile:
+
+```bash
+sudo systemctl start rutracker-browser   # not enabled; manual login only
+# …sign in through noVNC…
+sudo systemctl stop rutracker-browser    # hand the profile back to the MCP
+```
+
+Right after a `manual_auth_required` / `cloudflare_challenge` the MCP's own browser
+is still up (30 min grace) and visible over noVNC — the unit is only needed when
+that window has already lapsed. While the unit runs it holds the profile lock and
+the MCP attaches to it instead of launching its own, so stop it when done.
 
 Production Chromium uses a persistent profile and exposes noVNC on loopback only.
 Ubuntu 24.04 AppArmor blocks the downloaded Chromium user-namespace sandbox, so

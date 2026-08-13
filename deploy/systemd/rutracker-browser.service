@@ -1,5 +1,10 @@
+# Manual-login aid only — start it by hand when the MCP reports
+# `manual_auth_required` or `cloudflare_challenge`, sign in through noVNC, then
+# stop it again. The MCP launches its own Chromium on this profile and stops it
+# when idle; while this unit runs it holds the single-instance lock on the profile
+# and the MCP just attaches to it. Deliberately not enabled and not restarted.
 [Unit]
-Description=Persistent Chromium for rutracker-mcp
+Description=Persistent Chromium for rutracker-mcp (manual login only)
 After=rutracker-browser-xvfb.service rutracker-proxy.service
 Requires=rutracker-browser-xvfb.service rutracker-proxy.service
 
@@ -14,8 +19,7 @@ Environment=RUTRACKER_BROWSER_PROFILE=/var/lib/rutracker-browser/profile
 ExecStartPre=/bin/sh -c 'until test -S /tmp/.X11-unix/X99; do sleep 0.1; done'
 ExecStartPre=/opt/rutracker-torrent-mcp/deploy/reset-browser-profile.sh
 ExecStart=/opt/rutracker-torrent-mcp/deploy/run-browser.sh
-Restart=always
-RestartSec=5
+Restart=no
 # The host has 3.8 GiB; an unbounded Chromium can take all of it (2026-08-13 OOM).
 MemoryHigh=768M
 MemoryMax=1G
@@ -23,6 +27,3 @@ NoNewPrivileges=true
 ProtectHome=true
 ProtectSystem=strict
 ReadWritePaths=/tmp /var/lib/rutracker-browser
-
-[Install]
-WantedBy=multi-user.target

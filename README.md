@@ -46,9 +46,13 @@ Then open `http://127.0.0.1:6080/vnc.html?autoconnect=1&resize=scale`. The Chrom
 profile survives service and host restarts. A session requiring operator action
 returns `manual_auth_required`.
 
-MCP connects to that Chromium on the first tool call (with retries), works inside
-the tab that is already open, and closes any other tab it finds — the browser is
-never allowed to accumulate tabs, which once OOMed the host.
+With `RUTRACKER_BROWSER_PROFILE` set, MCP starts Chromium itself on the first tool
+call and stops it after `RUTRACKER_BROWSER_IDLE_TIMEOUT_SECONDS` — between searches
+nothing runs, and the session lives in the profile on disk. If a browser is already
+listening on the CDP endpoint (the operator started `rutracker-browser.service` to
+sign in), MCP attaches to that one instead and never shuts it down. Either way it
+works inside the tab that is already open and closes every other tab it finds — the
+browser is not allowed to accumulate tabs, which once OOMed the host.
 
 rutracker sometimes responds to a fresh login with a captcha. The tool layer
 translates that into a structured error:
@@ -83,6 +87,11 @@ and never loops.
 | `RUTRACKER_BROWSER_CONNECT_TIMEOUT_SECONDS` |  | `10` | Per-attempt CDP connect timeout. |
 | `RUTRACKER_BROWSER_CONNECT_ATTEMPTS` |  | `3` | CDP connect attempts per tool call. |
 | `RUTRACKER_BROWSER_CONNECT_BACKOFF_SECONDS` |  | `2` | Backoff before the retry; doubles. |
+| `RUTRACKER_BROWSER_PROFILE` |  | — | Profile dir; set ⇒ MCP launches/stops Chromium itself. |
+| `RUTRACKER_BROWSER_EXECUTABLE_PATH` |  | — | Chromium binary (else via `PLAYWRIGHT_BROWSERS_PATH`). |
+| `RUTRACKER_BROWSER_PROXY_URL` |  | — | Proxy for the launched browser. |
+| `RUTRACKER_BROWSER_IDLE_TIMEOUT_SECONDS` |  | `300` | Idle shutdown for a self-launched browser. |
+| `RUTRACKER_BROWSER_MANUAL_LOGIN_GRACE_SECONDS` |  | `1800` | Keep-alive after an auth/challenge error. |
 | `MCP_AUTH_TOKEN` | for HTTP | — | Bearer token shared with the bot. |
 | `MCP_TRANSPORT` |  | `stdio` | One of `stdio`, `sse`, `streamable-http`. |
 | `MCP_HTTP_HOST` |  | `127.0.0.1` | Bind host for HTTP transports. |

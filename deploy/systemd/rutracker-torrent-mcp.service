@@ -1,0 +1,27 @@
+[Unit]
+Description=rutracker-torrent-mcp (streamable HTTP)
+Documentation=https://github.com/wildcar/rutracker-torrent-mcp
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=movie
+Group=movie
+WorkingDirectory=/opt/rutracker-torrent-mcp
+EnvironmentFile=/etc/movie-handler/rutracker.env
+Environment=MCP_TRANSPORT=streamable-http
+Environment=MCP_HTTP_HOST=127.0.0.1
+Environment=MCP_HTTP_PORT=8767
+ExecStart=/opt/rutracker-torrent-mcp/.venv/bin/rutracker-torrent-mcp
+Restart=on-failure
+RestartSec=5
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/rutracker-torrent-mcp/.cache
+
+[Install]
+WantedBy=multi-user.target

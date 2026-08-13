@@ -4,6 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import re
+import shutil
+import time
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
 
@@ -36,7 +40,14 @@ async ({url}) => {
 
 
 class PlaywrightRutrackerClient:
-    """Drive an externally managed persistent Chromium over CDP."""
+    """Drive a persistent Chromium — one we launch ourselves, or an existing one.
+
+    With ``profile_dir`` set the client owns the browser: it launches Chromium on
+    that profile at the first request and shuts it down once idle, so nothing runs
+    between searches. An already-running browser (the operator started the unit to
+    log in through VNC) is attached over CDP instead and never shut down — it isn't
+    ours to close, and the profile takes only one process at a time.
+    """
 
     def __init__(
         self,
@@ -47,6 +58,11 @@ class PlaywrightRutrackerClient:
         connect_timeout: float = 10.0,
         connect_attempts: int = 3,
         connect_backoff: float = 2.0,
+        profile_dir: Path | None = None,
+        executable_path: str | None = None,
+        browser_proxy: str | None = None,
+        idle_timeout: float = 300.0,
+        manual_login_grace: float = 1800.0,
         page: Any = None,
     ) -> None:
         self._base = base_url.rstrip("/")
@@ -55,10 +71,18 @@ class PlaywrightRutrackerClient:
         self._connect_timeout_ms = int(connect_timeout * 1000)
         self._connect_attempts = max(1, connect_attempts)
         self._connect_backoff = connect_backoff
+        self._profile_dir = profile_dir
+        self._executable_path = executable_path
+        self._browser_proxy = browser_proxy
+        self._idle_timeout = idle_timeout
+        self._manual_login_grace = manual_login_grace
         self._playwright: Any = None
         self._browser: Any = None
+        self._launched: Any = None
         self._page: Any = page
         self._owns_page = False
+        self._idle_deadline = 0.0
+        self._idle_task: asyncio.Task[None] | None = None
         self._request_lock = asyncio.Lock()
         self._connect_lock = asyncio.Lock()
 
@@ -79,7 +103,49 @@ class PlaywrightRutrackerClient:
         await self.aclose()
 
     async def aclose(self) -> None:
+        task, self._idle_task = self._idle_task, None
+        if task is not None:
+            task.cancel()
         await self._detach()
+
+    def _touch(self) -> None:
+        """Push the idle deadline out; never pull it in (see the operator grace)."""
+        self._idle_deadline = max(self._idle_deadline, time.monotonic() + self._idle_timeout)
+        self._arm_idle_watchdog()
+
+    def _extend_for_operator(self) -> None:
+        """Hold a self-launched browser up for a VNC login / Turnstile solve.
+
+        The operator is told to open noVNC; shutting the browser down five minutes
+        later would take the window away mid-fix.
+        """
+        if self._launched is None:
+            return
+        self._idle_deadline = max(self._idle_deadline, time.monotonic() + self._manual_login_grace)
+
+    def _arm_idle_watchdog(self) -> None:
+        if self._launched is None or self._idle_timeout <= 0:
+            return
+        if self._idle_task is None or self._idle_task.done():
+            self._idle_task = asyncio.create_task(self._idle_watchdog())
+
+    async def _idle_watchdog(self) -> None:
+        """Shut a self-launched browser down once nothing has used it for a while.
+
+        The browser is only needed during a request — the session and
+        `cf_clearance` live in the on-disk profile.
+        """
+        while True:
+            remaining = self._idle_deadline - time.monotonic()
+            if remaining > 0:
+                await asyncio.sleep(remaining)
+                continue
+            async with self._request_lock:
+                if time.monotonic() < self._idle_deadline:
+                    continue
+                if self._launched is not None:
+                    await self._detach()
+                return
 
     async def _ensure_page(self) -> Any:
         """Return a live working tab, connecting to Chromium if needed."""
@@ -113,6 +179,17 @@ class PlaywrightRutrackerClient:
         from playwright.async_api import async_playwright
 
         self._playwright = await async_playwright().start()
+        if self._profile_dir is None:
+            await self._attach_over_cdp()
+            return
+        try:
+            # An operator signing in through VNC holds the profile; attach to that
+            # browser rather than fighting it for the single-instance lock.
+            await self._attach_over_cdp()
+        except Exception:
+            await self._launch_persistent()
+
+    async def _attach_over_cdp(self) -> None:
         self._browser = await self._playwright.chromium.connect_over_cdp(
             self._cdp_url,
             timeout=self._connect_timeout_ms,
@@ -121,6 +198,24 @@ class PlaywrightRutrackerClient:
             raise RutrackerError("persistent Chromium has no browser context")
         context = self._browser.contexts[0]
         self._page, self._owns_page = await _adopt_working_page(context)
+
+    async def _launch_persistent(self) -> None:
+        assert self._profile_dir is not None
+        _clear_session_restore(self._profile_dir)
+        kwargs: dict[str, Any] = {
+            "headless": False,
+            "args": list(_CHROMIUM_ARGS),
+            "timeout": self._connect_timeout_ms,
+            "viewport": None,
+        }
+        if self._executable_path:
+            kwargs["executable_path"] = self._executable_path
+        if self._browser_proxy:
+            kwargs["proxy"] = {"server": self._browser_proxy}
+        self._launched = await self._playwright.chromium.launch_persistent_context(
+            str(self._profile_dir), **kwargs
+        )
+        self._page, self._owns_page = await _adopt_working_page(self._launched)
 
     async def _detach(self) -> None:
         page, owns = self._page, self._owns_page
@@ -131,6 +226,12 @@ class PlaywrightRutrackerClient:
                 await page.close()
             except Exception:
                 pass
+        if self._launched is not None:
+            try:
+                await self._launched.close()
+            except Exception:
+                pass
+            self._launched = None
         self._browser = None
         if self._playwright is not None:
             try:
@@ -155,24 +256,30 @@ class PlaywrightRutrackerClient:
 
     async def download_torrent(self, topic_id: int) -> tuple[str, bytes]:
         async with self._request_lock:
-            await self._navigate_html_locked("/forum/viewtopic.php", params={"t": topic_id})
-            page = await self._ensure_page()
-            url = self._url("/forum/dl.php", {"t": topic_id})
-            result = await page.evaluate(_FETCH_SCRIPT, {"url": url})
-            status = int(result["status"])
-            headers = {str(k).lower(): str(v) for k, v in result["headers"].items()}
-            if _is_cloudflare_challenge("", headers):
-                raise CloudflareChallenge(_CHALLENGE_MESSAGE)
-            if status in {401, 403}:
-                raise ManualLoginRequired(_MANUAL_LOGIN_MESSAGE)
-            if status >= 400:
-                raise RutrackerError(f"rutracker /forum/dl.php → HTTP {status}")
-            content = base64.b64decode(result["body"])
-            ctype = headers.get("content-type", "").lower()
-            if "x-bittorrent" not in ctype and not content.startswith(b"d"):
-                raise ManualLoginRequired(_MANUAL_LOGIN_MESSAGE)
-            filename = _parse_disposition_filename(headers.get("content-disposition", ""))
-            return filename or f"[rutracker.org].t{topic_id}.torrent", content
+            try:
+                await self._navigate_html_locked("/forum/viewtopic.php", params={"t": topic_id})
+                page = await self._ensure_page()
+                url = self._url("/forum/dl.php", {"t": topic_id})
+                result = await page.evaluate(_FETCH_SCRIPT, {"url": url})
+                status = int(result["status"])
+                headers = {str(k).lower(): str(v) for k, v in result["headers"].items()}
+                if _is_cloudflare_challenge("", headers):
+                    raise CloudflareChallenge(_CHALLENGE_MESSAGE)
+                if status in {401, 403}:
+                    raise ManualLoginRequired(_MANUAL_LOGIN_MESSAGE)
+                if status >= 400:
+                    raise RutrackerError(f"rutracker /forum/dl.php → HTTP {status}")
+                content = base64.b64decode(result["body"])
+                ctype = headers.get("content-type", "").lower()
+                if "x-bittorrent" not in ctype and not content.startswith(b"d"):
+                    raise ManualLoginRequired(_MANUAL_LOGIN_MESSAGE)
+                filename = _parse_disposition_filename(headers.get("content-disposition", ""))
+                return filename or f"[rutracker.org].t{topic_id}.torrent", content
+            except (CloudflareChallenge, ManualLoginRequired):
+                self._extend_for_operator()
+                raise
+            finally:
+                self._touch()
 
     async def magnet_link(self, topic_id: int) -> str | None:
         html = await self._navigate_html("/forum/viewtopic.php", params={"t": topic_id})
@@ -194,7 +301,13 @@ class PlaywrightRutrackerClient:
         params: dict[str, Any] | None = None,
     ) -> str:
         async with self._request_lock:
-            return await self._navigate_html_locked(path, params=params)
+            try:
+                return await self._navigate_html_locked(path, params=params)
+            except (CloudflareChallenge, ManualLoginRequired):
+                self._extend_for_operator()
+                raise
+            finally:
+                self._touch()
 
     async def _navigate_html_locked(
         self,
@@ -233,15 +346,54 @@ class PlaywrightRutrackerClient:
 
 _CHALLENGE_TITLE = "just a moment..."
 
+# Mirrors deploy/run-browser.sh: the same profile has to behave the same way
+# whether the operator starts Chromium or we launch it.
+_CHROMIUM_ARGS: tuple[str, ...] = (
+    "--disable-dev-shm-usage",
+    "--no-sandbox",  # AppArmor blocks the downloaded Chromium's userns sandbox
+    "--no-first-run",
+    "--no-default-browser-check",
+    "--disable-session-crashed-bubble",
+    "--hide-crash-restore-bubble",
+    "--window-size=1440,900",
+)
+
+
+def _clear_session_restore(profile_dir: Path) -> None:
+    """Drop session-restore state so a killed browser doesn't come back with tabs.
+
+    Python twin of ``deploy/reset-browser-profile.sh``, for the profile we launch
+    ourselves: a SIGKILLed Chromium leaves ``exit_type: Crashed`` behind and would
+    otherwise restore every tab it had open.
+    """
+    default = profile_dir / "Default"
+    for path in (default / "Sessions", default / "Session Storage"):
+        shutil.rmtree(path, ignore_errors=True)
+    prefs = default / "Preferences"
+    try:
+        raw = prefs.read_text(encoding="utf-8")
+    except OSError:
+        return
+    patched = re.sub(r'"exit_type":"[^"]*"', '"exit_type":"Normal"', raw)
+    patched = patched.replace('"exited_cleanly":false', '"exited_cleanly":true')
+    if patched != raw:
+        try:
+            prefs.write_text(patched, encoding="utf-8")
+        except OSError:
+            pass
+
+
 _MANUAL_LOGIN_MESSAGE = (
-    "rutracker browser session is logged out; "
-    "open the persistent Chromium through noVNC and sign in"
+    "rutracker browser session is logged out; open the Chromium display through "
+    "noVNC and sign in. The browser is kept up for a while after this error; if the "
+    "display is empty, start rutracker-browser.service and sign in there"
 )
 
 _CHALLENGE_MESSAGE = (
     "rutracker is behind an interactive Cloudflare challenge; the login session "
-    "may still be valid. Open the persistent Chromium through noVNC and solve the "
-    "Turnstile challenge"
+    "may still be valid. Open the Chromium display through noVNC and solve the "
+    "Turnstile challenge. The browser is kept up for a while after this error; if "
+    "the display is empty, start rutracker-browser.service and solve it there"
 )
 
 
