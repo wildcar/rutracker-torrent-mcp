@@ -4,6 +4,12 @@ Newest first. Each entry ≤5 lines using the format defined in `AGENTS.md`.
 
 ---
 
+## 2026-08-13 · Deploy the OOM fixes to the bot host
+- What: `370c14a` live on `r1117636`: unit copied to `/etc/systemd/system`, `daemon-reload`, browser + MCP restarted. Verified 1 tab before/after a browser restart (was 3), `MemoryMax=1G` on the cgroup, live search + 13 KB `.torrent` through `127.0.0.1:8767`, and reconnect after a browser restart with the MCP untouched.
+- Why: The 18:24 OOM fixes are only worth anything on the host.
+- Files: production `/etc/systemd/system/rutracker-browser.service`, `/opt/rutracker-torrent-mcp`; `AGENTS/{STATE,HISTORY}.md`.
+- Next: Watch tab count and cgroup memory over the next few searches.
+
 ## 2026-08-13 · Bound Chromium: adopt one tab, lazy connect, memory cap
 - What: Client adopts `context.pages[0]` (closes it only if it created it); reaper closes every tab but the working one; CDP connect moved to first tool call with retries/backoff; fatal startup errors `os._exit(1)`; browser unit gets `MemoryHigh/MemoryMax` + a session-restore wipe in `ExecStartPre`, launcher drops its startup URL.
 - Why: 18:24 the host OOMed on 50 tabs in the persistent Chromium; the MCP then died at 18:25:50 on a 30 s `connect_over_cdp` timeout but stayed alive with no listening port, so systemd reported `active (running)` and never restarted it.

@@ -14,8 +14,10 @@ movie_handler bot, via authenticated HTML scraping.
 - Selectable `curl` and persistent Playwright/CDP backends are implemented.
 - Playwright mode keeps all protected requests inside one headful Chromium profile;
   missing auth returns `manual_auth_required`.
-- Production runs commit `b33bb74` with loopback-only Xvfb/x11vnc/noVNC/CDP;
-  the persistent profile is authenticated.
+- Production runs commit `370c14a` with loopback-only Xvfb/x11vnc/noVNC/CDP;
+  the persistent profile is authenticated. Verified 2026-08-13: exactly one tab
+  before and after a browser restart, search + `.torrent` live through the MCP,
+  and the MCP survives a browser restart without being restarted itself.
 - SOCKS5 egress through `212.192.223.34` is active on the bot host; its unit is
   committed as `deploy/systemd/rutracker-proxy.service`.
 - All four tools are live-verified through the browser backend; `.torrent` download
@@ -37,9 +39,6 @@ movie_handler bot, via authenticated HTML scraping.
 
 ## Next
 
-- **Deploy the 2026-08-13 OOM fixes** on the bot host: `git pull --ff-only` in
-  `/opt/rutracker-torrent-mcp`, `systemctl daemon-reload`, restart
-  `rutracker-browser` and the MCP unit; confirm one tab and a capped cgroup.
 - Monitor session lifetime; use noVNC when `manual_auth_required` (sign in) or
   `cloudflare_challenge` (solve Turnstile) is returned.
 - (when needed) Additional trackers under `clients/` (noname-club, kinozal).
