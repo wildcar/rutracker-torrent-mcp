@@ -43,6 +43,9 @@ movie_handler bot, via authenticated HTML scraping.
 - Challenge solving is one tap from a phone: token-gated public noVNC at
   `rtcc.wildcar.org` (`deploy/challenge-gate.py` + `deploy/nginx/` vhost +
   `rutracker-challenge-gate.service`); the Telegram bot mints the links.
+  Known limitation: Turnstile loops in the MCP's own grace-window browser
+  (Playwright/CDP attached — see `MEMORY.md`), so solving still needs an
+  operator to restart the MCP and start `rutracker-browser.service` first.
 
 ## Next
 
@@ -57,4 +60,10 @@ movie_handler bot, via authenticated HTML scraping.
 
 ## Deferred
 
-- —
+- **Detachable self-launched browser.** Spawn Chromium as a subprocess with
+  `--remote-debugging-port` (run-browser.sh style) and `connect_over_cdp` instead
+  of `launch_persistent_context`; on `cloudflare_challenge` /
+  `manual_auth_required` disconnect the CDP client but leave the process running
+  for the grace window. Then the challenge link works with zero operator SSH —
+  Turnstile sees a client-free browser (the loop is caused by the attached
+  client, see `MEMORY.md`). Idle shutdown = kill the subprocess.

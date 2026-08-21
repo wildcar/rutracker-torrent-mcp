@@ -4,6 +4,14 @@ Newest first. Each entry ≤5 lines using the format defined in `AGENTS.md`.
 
 ---
 
+## 2026-08-21 · Turnstile-loop root cause: attached CDP client
+- What: documented that Turnstile loops while Playwright/CDP is attached; challenge flow corrected to restart-MCP → `rutracker-browser.service` → solve → stop; deferred a detachable-browser refactor.
+- Why: first live run of the challenge link looped in the MCP's grace-window browser; solving in a client-free Chromium passed, and the `cf_clearance` was honored by the Playwright browser afterwards (verified via `search_torrents` over HTTP).
+- Files: `AGENTS/{MEMORY,ENV,STATE,HISTORY}.md`.
+- Next: detachable self-launched browser (see Deferred).
+
+---
+
 ## 2026-08-21 · Token-gated public noVNC for challenge solving
 - What: `deploy/challenge-gate.py` (loopback token gate, stdlib), `rutracker-challenge-gate.service`, and nginx vhost `rtcc.wildcar.org` fronting noVNC via `auth_request`; unauthorized → 404.
 - Why: Turnstile solving needed an operator SSH tunnel; now the Telegram bot hands admins a one-time 30-min link that works from a phone.
