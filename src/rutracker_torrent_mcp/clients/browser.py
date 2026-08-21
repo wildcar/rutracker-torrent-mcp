@@ -9,7 +9,7 @@ import shutil
 import time
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
 from selectolax.parser import HTMLParser
 
@@ -40,13 +40,21 @@ async ({url}) => {
 
 
 class PlaywrightRutrackerClient:
-    """Drive a persistent Chromium — one we launch ourselves, or an existing one.
+    """Drive a persistent Chromium — one we spawn ourselves, or an existing one.
 
-    With ``profile_dir`` set the client owns the browser: it launches Chromium on
-    that profile at the first request and shuts it down once idle, so nothing runs
-    between searches. An already-running browser (the operator started the unit to
-    log in through VNC) is attached over CDP instead and never shut down — it isn't
-    ours to close, and the profile takes only one process at a time.
+    With ``profile_dir`` set the client owns the browser process: it spawns
+    Chromium on that profile at the first request (as a plain subprocess serving
+    the CDP port — the same command line as ``deploy/run-browser.sh``) and kills
+    it once idle, so nothing runs between searches. An already-running browser
+    (the operator started the unit to log in through VNC) is attached over CDP
+    instead and never shut down — it isn't ours to close, and the profile takes
+    only one process at a time.
+
+    The CDP connection is always ``connect_over_cdp`` and therefore severable:
+    on an auth/challenge error the client disconnects but leaves the process on
+    the display for the manual-login grace window, because Turnstile fails in a
+    loop while any CDP client is attached (Cloudflare detects automation). The
+    next tool call re-attaches.
     """
 
     def __init__(
@@ -67,7 +75,11 @@ class PlaywrightRutrackerClient:
     ) -> None:
         self._base = base_url.rstrip("/")
         self._cdp_url = cdp_url
+        parsed = urlparse(cdp_url)
+        self._cdp_host = parsed.hostname or "127.0.0.1"
+        self._cdp_port = parsed.port or 9222
         self._timeout_ms = int(timeout * 1000)
+        self._connect_timeout = connect_timeout
         self._connect_timeout_ms = int(connect_timeout * 1000)
         self._connect_attempts = max(1, connect_attempts)
         self._connect_backoff = connect_backoff
@@ -78,7 +90,7 @@ class PlaywrightRutrackerClient:
         self._manual_login_grace = manual_login_grace
         self._playwright: Any = None
         self._browser: Any = None
-        self._launched: Any = None
+        self._process: Any = None
         self._page: Any = page
         self._owns_page = False
         self._idle_deadline = 0.0
@@ -107,30 +119,37 @@ class PlaywrightRutrackerClient:
         if task is not None:
             task.cancel()
         await self._detach()
+        await self._shutdown_process()
 
     def _touch(self) -> None:
         """Push the idle deadline out; never pull it in (see the operator grace)."""
         self._idle_deadline = max(self._idle_deadline, time.monotonic() + self._idle_timeout)
         self._arm_idle_watchdog()
 
-    def _extend_for_operator(self) -> None:
-        """Hold a self-launched browser up for a VNC login / Turnstile solve.
+    async def _release_for_operator(self) -> None:
+        """Free the browser for a human: drop the CDP client, keep the process.
 
-        The operator is told to open noVNC; shutting the browser down five minutes
-        later would take the window away mid-fix.
+        Turnstile fails in a loop while any CDP client is attached (Cloudflare
+        detects automation), so keeping the browser up is not enough — the
+        operator needs a client-free one. Our own process stays on the display
+        for the manual-login grace window; the next tool call re-attaches. A
+        browser we merely attached to is left alone the same way — the client
+        drops either way.
         """
-        if self._launched is None:
+        await self._detach()
+        if self._process is None:
             return
         self._idle_deadline = max(self._idle_deadline, time.monotonic() + self._manual_login_grace)
+        self._arm_idle_watchdog()
 
     def _arm_idle_watchdog(self) -> None:
-        if self._launched is None or self._idle_timeout <= 0:
+        if self._process is None or self._idle_timeout <= 0:
             return
         if self._idle_task is None or self._idle_task.done():
             self._idle_task = asyncio.create_task(self._idle_watchdog())
 
     async def _idle_watchdog(self) -> None:
-        """Shut a self-launched browser down once nothing has used it for a while.
+        """Kill a self-spawned browser once nothing has used it for a while.
 
         The browser is only needed during a request — the session and
         `cf_clearance` live in the on-disk profile.
@@ -143,8 +162,9 @@ class PlaywrightRutrackerClient:
             async with self._request_lock:
                 if time.monotonic() < self._idle_deadline:
                     continue
-                if self._launched is not None:
+                if self._process is not None:
                     await self._detach()
+                    await self._shutdown_process()
                 return
 
     async def _ensure_page(self) -> Any:
@@ -179,15 +199,17 @@ class PlaywrightRutrackerClient:
         from playwright.async_api import async_playwright
 
         self._playwright = await async_playwright().start()
-        if self._profile_dir is None:
+        try:
+            # Whatever serves the CDP port wins: an operator signing in through
+            # VNC holds the profile, and our own spawned browser outlives the
+            # connection across the operator grace window.
             await self._attach_over_cdp()
             return
-        try:
-            # An operator signing in through VNC holds the profile; attach to that
-            # browser rather than fighting it for the single-instance lock.
-            await self._attach_over_cdp()
         except Exception:
-            await self._launch_persistent()
+            if self._profile_dir is None:
+                raise
+        await self._spawn_browser()
+        await self._attach_over_cdp()
 
     async def _attach_over_cdp(self) -> None:
         self._browser = await self._playwright.chromium.connect_over_cdp(
@@ -199,25 +221,85 @@ class PlaywrightRutrackerClient:
         context = self._browser.contexts[0]
         self._page, self._owns_page = await _adopt_working_page(context)
 
-    async def _launch_persistent(self) -> None:
+    async def _spawn_browser(self) -> None:
+        """Start Chromium as a plain subprocess serving the CDP port.
+
+        Deliberately NOT ``launch_persistent_context``: a Playwright-launched
+        browser dies with its client, so it could never be handed over to the
+        operator client-free. This is the exact command line of
+        ``deploy/run-browser.sh``, and the profile behaves the same either way.
+        """
         assert self._profile_dir is not None
+        # A previous process that stopped serving CDP is wedged — replace it.
+        await self._shutdown_process()
         _clear_session_restore(self._profile_dir)
-        kwargs: dict[str, Any] = {
-            "headless": False,
-            "args": list(_CHROMIUM_ARGS),
-            "timeout": self._connect_timeout_ms,
-            "viewport": None,
-        }
-        if self._executable_path:
-            kwargs["executable_path"] = self._executable_path
-        if self._browser_proxy:
-            kwargs["proxy"] = {"server": self._browser_proxy}
-        self._launched = await self._playwright.chromium.launch_persistent_context(
-            str(self._profile_dir), **kwargs
+        executable = self._executable_path or str(self._playwright.chromium.executable_path)
+        self._process = await asyncio.create_subprocess_exec(
+            *self._spawn_command(executable),
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
         )
-        self._page, self._owns_page = await _adopt_working_page(self._launched)
+        await self._wait_for_cdp()
+
+    def _spawn_command(self, executable: str) -> list[str]:
+        assert self._profile_dir is not None
+        command = [
+            executable,
+            *_CHROMIUM_ARGS,
+            f"--remote-debugging-address={self._cdp_host}",
+            f"--remote-debugging-port={self._cdp_port}",
+            "--remote-allow-origins=*",
+            f"--user-data-dir={self._profile_dir}",
+        ]
+        if self._browser_proxy:
+            command.append(f"--proxy-server={self._browser_proxy}")
+        return command
+
+    async def _wait_for_cdp(self) -> None:
+        """Block until the spawned Chromium accepts connections on the CDP port."""
+        deadline = time.monotonic() + self._connect_timeout
+        while True:
+            if self._process is not None and self._process.returncode is not None:
+                raise RutrackerError(
+                    f"spawned Chromium exited with code {self._process.returncode} "
+                    "before serving CDP (single-instance lock held elsewhere?)"
+                )
+            try:
+                _, writer = await asyncio.open_connection(self._cdp_host, self._cdp_port)
+            except OSError:
+                if time.monotonic() >= deadline:
+                    raise RutrackerError(
+                        f"spawned Chromium did not open {self._cdp_url} within "
+                        f"{self._connect_timeout:.0f}s"
+                    ) from None
+                await asyncio.sleep(0.2)
+                continue
+            writer.close()
+            try:
+                await writer.wait_closed()
+            except Exception:
+                pass
+            return
+
+    async def _shutdown_process(self) -> None:
+        """Kill our spawned Chromium. Session-restore junk from the SIGTERM is
+        cleared on the next spawn (see ``_clear_session_restore``)."""
+        process, self._process = self._process, None
+        if process is None or process.returncode is not None:
+            return
+        try:
+            process.terminate()
+        except ProcessLookupError:
+            return
+        try:
+            await asyncio.wait_for(process.wait(), timeout=5.0)
+        except TimeoutError:
+            process.kill()
+            await process.wait()
 
     async def _detach(self) -> None:
+        """Drop the CDP client. Never kills the browser — ours keeps running
+        until ``_shutdown_process``; the operator's is not ours to stop."""
         page, owns = self._page, self._owns_page
         self._page = None
         self._owns_page = False
@@ -226,13 +308,13 @@ class PlaywrightRutrackerClient:
                 await page.close()
             except Exception:
                 pass
-        if self._launched is not None:
+        if self._browser is not None:
             try:
-                await self._launched.close()
+                # close() on a connect_over_cdp browser only disconnects.
+                await self._browser.close()
             except Exception:
                 pass
-            self._launched = None
-        self._browser = None
+            self._browser = None
         if self._playwright is not None:
             try:
                 # A driver left over from a timed-out connect can hang on stop().
@@ -276,7 +358,7 @@ class PlaywrightRutrackerClient:
                 filename = _parse_disposition_filename(headers.get("content-disposition", ""))
                 return filename or f"[rutracker.org].t{topic_id}.torrent", content
             except (CloudflareChallenge, ManualLoginRequired):
-                self._extend_for_operator()
+                await self._release_for_operator()
                 raise
             finally:
                 self._touch()
@@ -304,7 +386,7 @@ class PlaywrightRutrackerClient:
             try:
                 return await self._navigate_html_locked(path, params=params)
             except (CloudflareChallenge, ManualLoginRequired):
-                self._extend_for_operator()
+                await self._release_for_operator()
                 raise
             finally:
                 self._touch()
@@ -385,15 +467,15 @@ def _clear_session_restore(profile_dir: Path) -> None:
 
 _MANUAL_LOGIN_MESSAGE = (
     "rutracker browser session is logged out; open the Chromium display through "
-    "noVNC and sign in. The browser is kept up for a while after this error; if the "
-    "display is empty, start rutracker-browser.service and sign in there"
+    "the challenge link or noVNC and sign in. The browser is kept on the display "
+    "with no automation attached for the grace window after this error"
 )
 
 _CHALLENGE_MESSAGE = (
     "rutracker is behind an interactive Cloudflare challenge; the login session "
-    "may still be valid. Open the Chromium display through noVNC and solve the "
-    "Turnstile challenge. The browser is kept up for a while after this error; if "
-    "the display is empty, start rutracker-browser.service and solve it there"
+    "may still be valid. Open the Chromium display through the challenge link or "
+    "noVNC and solve the Turnstile. The browser is kept on the display with no "
+    "automation attached for the grace window after this error"
 )
 
 

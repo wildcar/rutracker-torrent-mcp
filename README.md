@@ -49,11 +49,16 @@ Then open `http://127.0.0.1:6080/vnc.html?autoconnect=1&resize=scale`. The Chrom
 profile survives service and host restarts. A session requiring operator action
 returns `manual_auth_required`.
 
-With `RUTRACKER_BROWSER_PROFILE` set, MCP starts Chromium itself on the first tool
-call and stops it after `RUTRACKER_BROWSER_IDLE_TIMEOUT_SECONDS` — between searches
-nothing runs, and the session lives in the profile on disk. If a browser is already
-listening on the CDP endpoint (the operator started `rutracker-browser.service` to
-sign in), MCP attaches to that one instead and never shuts it down. Either way it
+With `RUTRACKER_BROWSER_PROFILE` set, MCP spawns Chromium itself on the first tool
+call (a plain subprocess serving the CDP port — the same command line as
+`deploy/run-browser.sh`) and kills it after `RUTRACKER_BROWSER_IDLE_TIMEOUT_SECONDS`
+— between searches nothing runs, and the session lives in the profile on disk. On
+`cloudflare_challenge` / `manual_auth_required` the MCP disconnects its CDP client
+and leaves the browser on the display for the grace window: Turnstile fails in a
+loop while any CDP client is attached, so the hand-over browser is deliberately
+client-free, and the next tool call re-attaches. If a browser is already listening
+on the CDP endpoint (the operator started `rutracker-browser.service` to sign in),
+MCP attaches to that one instead and never shuts it down. Either way it
 works inside the tab that is already open and closes every other tab it finds — the
 browser is not allowed to accumulate tabs, which once OOMed the host.
 

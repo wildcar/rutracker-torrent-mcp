@@ -15,13 +15,12 @@ agreements live in `../AGENTS/MEMORY.md` — don't duplicate them here.
   `httpx` hangs on `ReadTimeout`. `curl_cffi` (Chrome JA3 impersonation) is required —
   do not "simplify" the client back to `httpx`.
 - **Turnstile loops while a CDP client is attached** (checkbox → spinner →
-  checkbox again, forever): Cloudflare detects Playwright/CDP automation, so the
-  MCP's own grace-window browser can NOT be used to solve challenges. Solve only
-  in a client-free Chromium: `systemctl restart rutracker-torrent-mcp` (drops the
-  attached browser), `systemctl start rutracker-browser`, solve over the
-  challenge link / noVNC, `systemctl stop rutracker-browser`. The resulting
-  `cf_clearance` IS honored afterwards inside the Playwright-launched browser
-  (verified end-to-end 2026-08-21).
+  checkbox again, forever): Cloudflare detects Playwright/CDP automation. That is
+  why the browser client spawns Chromium as a plain subprocess and disconnects
+  on challenge/auth errors instead of using `launch_persistent_context` (whose
+  browser dies with its client and can never be handed over client-free) — do
+  not "simplify" it back. A `cf_clearance` earned in a client-free browser IS
+  honored after the client re-attaches (verified end-to-end 2026-08-21).
 - **Topic-page size parsing must stay label-anchored.** Use `_SIZE_LABELED_RE`
   (token after `Размер:`/`Size:`) on the topic page; a whole-page regex matches stray
   `<input size=5>`-style tokens and returns garbage sizes.

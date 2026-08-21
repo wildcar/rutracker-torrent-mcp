@@ -12,10 +12,14 @@ movie_handler bot, via authenticated HTML scraping.
 - Four tools live and tested: `search_torrents`, `get_torrent_file`,
   `get_magnet_link`, `get_topic_info`.
 - Selectable `curl` and persistent Playwright backends are implemented.
-- The MCP owns Chromium: it launches the browser on the shared profile at the first
-  tool call and stops it after 5 min idle, so nothing runs between searches. An
-  operator-started `rutracker-browser.service` (manual login only, not enabled) wins
-  the profile lock and is attached to over CDP instead, never shut down by us.
+- The MCP owns Chromium: it spawns the browser as a plain subprocess serving the
+  CDP port (run-browser.sh command line) at the first tool call, attaches over
+  `connect_over_cdp`, and kills it after 5 min idle — nothing runs between
+  searches. An operator-started `rutracker-browser.service` (manual login only,
+  not enabled) wins the profile lock and is attached to instead, never shut down
+  by us. On challenge/auth errors the client disconnects and leaves the process
+  on the display for the 30-min grace window (Turnstile loops while a CDP client
+  is attached), then re-attaches on the next tool call.
 - Playwright mode keeps all protected requests inside one headful Chromium profile;
   missing auth returns `manual_auth_required`.
 - Production runs commit `370c14a` with loopback-only Xvfb/x11vnc/noVNC/CDP;
@@ -42,10 +46,8 @@ movie_handler bot, via authenticated HTML scraping.
   passes a startup URL.
 - Challenge solving is one tap from a phone: token-gated public noVNC at
   `rtcc.wildcar.org` (`deploy/challenge-gate.py` + `deploy/nginx/` vhost +
-  `rutracker-challenge-gate.service`); the Telegram bot mints the links.
-  Known limitation: Turnstile loops in the MCP's own grace-window browser
-  (Playwright/CDP attached — see `MEMORY.md`), so solving still needs an
-  operator to restart the MCP and start `rutracker-browser.service` first.
+  `rutracker-challenge-gate.service`); the Telegram bot mints the links, and the
+  MCP hands over a client-free browser automatically — no operator SSH needed.
 
 ## Next
 
@@ -60,10 +62,4 @@ movie_handler bot, via authenticated HTML scraping.
 
 ## Deferred
 
-- **Detachable self-launched browser.** Spawn Chromium as a subprocess with
-  `--remote-debugging-port` (run-browser.sh style) and `connect_over_cdp` instead
-  of `launch_persistent_context`; on `cloudflare_challenge` /
-  `manual_auth_required` disconnect the CDP client but leave the process running
-  for the grace window. Then the challenge link works with zero operator SSH —
-  Turnstile sees a client-free browser (the loop is caused by the attached
-  client, see `MEMORY.md`). Idle shutdown = kill the subprocess.
+- —

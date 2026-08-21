@@ -249,79 +249,128 @@ async def test_client_leaves_the_adopted_tab_open() -> None:
     assert not page.closed
 
 
-class FakeLaunchedContext(FakeContext):
-    def __init__(self, pages: list[FakePage]) -> None:
-        super().__init__(pages)
-        self.context_closed = False
+class FakeProcess:
+    """Stands in for the spawned Chromium subprocess."""
+
+    def __init__(self) -> None:
+        self.returncode: int | None = None
+
+    def terminate(self) -> None:
+        self.returncode = -15
+
+    def kill(self) -> None:
+        self.returncode = -9
+
+    async def wait(self) -> int:
+        return self.returncode or 0
+
+    @property
+    def alive(self) -> bool:
+        return self.returncode is None
+
+
+class FakeBrowserConnection:
+    """The connect_over_cdp handle: close() only disconnects."""
+
+    def __init__(self) -> None:
+        self.disconnected = False
 
     async def close(self) -> None:
-        self.context_closed = True
-        for page in self.pages:
-            page.closed = True
+        self.disconnected = True
 
 
-def _launching_client(
+def _spawning_client(
     monkeypatch: pytest.MonkeyPatch,
     *,
     idle_timeout: float,
+    manual_login_grace: float = 60.0,
     html: str = "<html></html>",
     title: str = "RuTracker.org",
     status: int = 200,
-) -> tuple[PlaywrightRutrackerClient, list[FakeLaunchedContext]]:
-    """A client whose `_connect_once` stands in for launch_persistent_context."""
+) -> tuple[PlaywrightRutrackerClient, list[FakeProcess]]:
+    """A client whose `_connect_once` stands in for spawn + connect_over_cdp.
+
+    Mimics production semantics: the process survives a detach, and a new one
+    is spawned only when the previous one is gone.
+    """
     client = PlaywrightRutrackerClient(
         base_url="https://rutracker.org",
         cdp_url="http://127.0.0.1:9222",
         profile_dir=Path("/nonexistent/profile"),
         idle_timeout=idle_timeout,
-        manual_login_grace=60.0,
+        manual_login_grace=manual_login_grace,
         connect_attempts=1,
         connect_backoff=0.0,
     )
-    launched: list[FakeLaunchedContext] = []
+    processes: list[FakeProcess] = []
 
     async def fake_connect() -> None:
-        page = FakePage(html=html, title=title, status=status)
-        ctx = FakeLaunchedContext([page])
-        launched.append(ctx)
-        client._launched = ctx
-        client._page = page
+        if client._process is None or client._process.returncode is not None:
+            client._process = FakeProcess()
+            processes.append(client._process)
+        client._browser = FakeBrowserConnection()
+        client._page = FakePage(html=html, title=title, status=status)
 
     monkeypatch.setattr(client, "_connect_once", fake_connect)
-    return client, launched
+    return client, processes
 
 
 async def test_idle_browser_is_shut_down(monkeypatch: pytest.MonkeyPatch) -> None:
     """Nothing should run between searches — the profile keeps the session."""
-    client, launched = _launching_client(monkeypatch, idle_timeout=0.05)
+    client, processes = _spawning_client(monkeypatch, idle_timeout=0.05)
 
     await client.topic_info(1)
-    assert launched[0].context_closed is False
+    assert processes[0].alive
 
     await asyncio.sleep(0.2)
-    assert launched[0].context_closed is True
-    assert client._launched is None
+    assert not processes[0].alive
+    assert client._process is None
 
 
-async def test_next_call_relaunches_after_an_idle_shutdown(
+async def test_next_call_respawns_after_an_idle_shutdown(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    client, launched = _launching_client(monkeypatch, idle_timeout=0.05)
+    client, processes = _spawning_client(monkeypatch, idle_timeout=0.05)
 
     await client.topic_info(1)
     await asyncio.sleep(0.2)
     await client.topic_info(1)
 
-    assert len(launched) == 2
-    assert launched[1].context_closed is False
+    assert len(processes) == 2
+    assert processes[1].alive
     await client.aclose()
 
 
-async def test_manual_login_keeps_the_browser_up_for_the_operator(
+async def test_challenge_detaches_the_client_but_keeps_the_browser(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The operator is sent to noVNC; don't close the window under them."""
-    client, launched = _launching_client(
+    """Turnstile loops while a CDP client is attached — hand over a clean browser."""
+    client, processes = _spawning_client(
+        monkeypatch,
+        idle_timeout=0.05,
+        html="<html></html>",
+        title="Just a moment...",
+        status=403,
+    )
+
+    with pytest.raises(CloudflareChallenge):
+        await client.search("Dune")
+
+    # the client is gone, the process is not
+    assert client._page is None
+    assert client._browser is None
+    assert processes[0].alive
+
+    # ...and it survives well past the ordinary idle timeout
+    await asyncio.sleep(0.2)
+    assert processes[0].alive
+    await client.aclose()
+
+
+async def test_manual_login_detaches_the_client_but_keeps_the_browser(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, processes = _spawning_client(
         monkeypatch,
         idle_timeout=0.05,
         html='<html><form><input name="login_username"><input name="login_password"></form></html>',
@@ -330,9 +379,89 @@ async def test_manual_login_keeps_the_browser_up_for_the_operator(
     with pytest.raises(ManualLoginRequired):
         await client.search("Dune")
 
+    assert client._browser is None
     await asyncio.sleep(0.2)
-    assert launched[0].context_closed is False
+    assert processes[0].alive
     await client.aclose()
+
+
+async def test_grace_expiry_kills_the_detached_browser(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The hand-over window is finite; nothing runs forever."""
+    client, processes = _spawning_client(
+        monkeypatch,
+        idle_timeout=0.05,
+        manual_login_grace=0.2,
+        title="Just a moment...",
+        status=403,
+    )
+
+    with pytest.raises(CloudflareChallenge):
+        await client.search("Dune")
+
+    await asyncio.sleep(0.5)
+    assert not processes[0].alive
+    assert client._process is None
+
+
+async def test_reconnect_during_grace_reuses_the_same_browser(
+    monkeypatch: pytest.MonkeyPatch, search_html: str
+) -> None:
+    """After the operator solves the challenge, the retry must not respawn."""
+    client, processes = _spawning_client(
+        monkeypatch,
+        idle_timeout=60.0,
+        title="Just a moment...",
+        status=403,
+    )
+
+    with pytest.raises(CloudflareChallenge):
+        await client.search("Dune")
+
+    # the operator solved it; the next call re-attaches to the same process
+    async def solved_connect() -> None:
+        client._browser = FakeBrowserConnection()
+        client._page = FakePage(html=search_html)
+
+    monkeypatch.setattr(client, "_connect_once", solved_connect)
+
+    assert len(await client.search("Dune", limit=1)) == 1
+    assert len(processes) == 1
+    assert processes[0].alive
+    await client.aclose()
+
+
+def test_spawn_command_mirrors_run_browser_sh() -> None:
+    client = PlaywrightRutrackerClient(
+        base_url="https://rutracker.org",
+        cdp_url="http://127.0.0.1:9222",
+        profile_dir=Path("/var/lib/rutracker-browser/profile"),
+        browser_proxy="socks5://127.0.0.1:1080",
+    )
+
+    command = client._spawn_command("/opt/chromium/chrome")
+
+    assert command[0] == "/opt/chromium/chrome"
+    assert "--no-sandbox" in command
+    assert "--remote-debugging-address=127.0.0.1" in command
+    assert "--remote-debugging-port=9222" in command
+    assert "--remote-allow-origins=*" in command
+    assert "--user-data-dir=/var/lib/rutracker-browser/profile" in command
+    assert "--proxy-server=socks5://127.0.0.1:1080" in command
+
+
+def test_spawn_command_omits_proxy_when_unset() -> None:
+    client = PlaywrightRutrackerClient(
+        base_url="https://rutracker.org",
+        cdp_url="http://127.0.0.1:9333",
+        profile_dir=Path("/p"),
+    )
+
+    command = client._spawn_command("/bin/chrome")
+
+    assert "--remote-debugging-port=9333" in command
+    assert not any(arg.startswith("--proxy-server") for arg in command)
 
 
 async def test_attached_browser_is_never_shut_down(monkeypatch: pytest.MonkeyPatch) -> None:

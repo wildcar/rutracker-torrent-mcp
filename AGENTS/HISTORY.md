@@ -4,6 +4,14 @@ Newest first. Each entry ≤5 lines using the format defined in `AGENTS.md`.
 
 ---
 
+## 2026-08-21 · Detachable browser: spawn + connect_over_cdp
+- What: self-launched Chromium is now a plain subprocess on the CDP port (run-browser.sh command line) attached via `connect_over_cdp`; on challenge/auth errors the client disconnects, leaving a client-free browser on the display for the grace window; idle shutdown kills the subprocess.
+- Why: Turnstile loops while a CDP client is attached, and a `launch_persistent_context` browser dies with its client — the challenge link needed operator SSH to work.
+- Files: `src/rutracker_torrent_mcp/clients/browser.py`, `src/rutracker_torrent_mcp/tools.py`, `tests/test_browser.py`, `AGENTS/{ENV,MEMORY,STATE,HISTORY}.md`, `README.md`.
+- Next: —
+
+---
+
 ## 2026-08-21 · Turnstile-loop root cause: attached CDP client
 - What: documented that Turnstile loops while Playwright/CDP is attached; challenge flow corrected to restart-MCP → `rutracker-browser.service` → solve → stop; deferred a detachable-browser refactor.
 - Why: first live run of the challenge link looped in the MCP's grace-window browser; solving in a client-free Chromium passed, and the `cf_clearance` was honored by the Playwright browser afterwards (verified via `search_torrents` over HTTP).

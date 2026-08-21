@@ -66,13 +66,14 @@ sudo systemctl start rutracker-browser   # not enabled; manual login only
 sudo systemctl stop rutracker-browser    # hand the profile back to the MCP
 ```
 
-The MCP's own grace-window browser is visible over noVNC but **cannot pass a
-Turnstile**: the Playwright client stays attached over CDP and Cloudflare detects
-it — the checkbox loops forever (see `MEMORY.md`). To actually solve a challenge,
-first `sudo systemctl restart rutracker-torrent-mcp` so its browser (and the CDP
-attachment) goes away, then start the unit and solve in that clean Chromium.
-While the unit runs it holds the profile lock and the MCP attaches to it instead
-of launching its own, so stop it when done.
+On `cloudflare_challenge` / `manual_auth_required` the MCP **disconnects its CDP
+client** and leaves its spawned Chromium on the display for the grace window —
+Turnstile loops while any CDP client is attached (see `MEMORY.md`), so the
+hand-over browser is deliberately client-free. Just open the challenge link (or
+noVNC) and solve; the next tool call re-attaches to the same process. The
+`rutracker-browser.service` unit is only needed when the display is empty (the
+grace window lapsed). While the unit runs it holds the profile lock and the MCP
+attaches to it instead of spawning its own, so stop it when done.
 
 Starting the unit while the MCP's browser is up is a no-op: Chromium sees the
 single-instance lock, logs `Opening in existing browser session` and exits, leaving

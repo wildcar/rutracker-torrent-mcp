@@ -248,16 +248,18 @@ def _auth_error(exc: Exception) -> ToolError:
             code="cloudflare_challenge",
             message=(
                 "rutracker is behind an interactive Cloudflare challenge. The login "
-                "session is likely still valid — open persistent Chromium through "
-                "noVNC and solve the Turnstile challenge."
+                "session is likely still valid — open the challenge link (or noVNC) "
+                "and solve the Turnstile; the browser is waiting with no automation "
+                "attached."
             ),
         )
     if isinstance(exc, ManualLoginRequired):
         return ToolError(
             code="manual_auth_required",
             message=(
-                "rutracker browser session is logged out. "
-                "Open persistent Chromium through noVNC and sign in."
+                "rutracker browser session is logged out. Open the challenge link "
+                "(or noVNC) and sign in; the browser is waiting with no automation "
+                "attached."
             ),
         )
     if isinstance(exc, LoginCaptchaRequired):
