@@ -36,7 +36,10 @@ a pasted rutracker topic URL into a release the metadata flow can match.
 Production can use `RUTRACKER_BACKEND=playwright`. In this mode MCP connects to
 a persistent headful Chromium over loopback CDP; search, topic pages, magnets and
 `.torrent` downloads all stay inside the same browser context. Initial login and
-future Cloudflare challenges are completed manually through loopback-only noVNC:
+future Cloudflare challenges are completed manually through noVNC — normally via
+the one-time link the Telegram bot sends admins (`deploy/challenge-gate.py` +
+`deploy/nginx/rtcc.wildcar.org.conf` gate the public vhost; unauthorized → 404),
+or over an SSH tunnel as a fallback:
 
 ```bash
 ssh -L 6080:127.0.0.1:6080 keeper@208.92.227.90

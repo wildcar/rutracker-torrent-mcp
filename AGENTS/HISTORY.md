@@ -4,6 +4,14 @@ Newest first. Each entry ≤5 lines using the format defined in `AGENTS.md`.
 
 ---
 
+## 2026-08-21 · Token-gated public noVNC for challenge solving
+- What: `deploy/challenge-gate.py` (loopback token gate, stdlib), `rutracker-challenge-gate.service`, and nginx vhost `rtcc.wildcar.org` fronting noVNC via `auth_request`; unauthorized → 404.
+- Why: Turnstile solving needed an operator SSH tunnel; now the Telegram bot hands admins a one-time 30-min link that works from a phone.
+- Files: `deploy/challenge-gate.py`, `deploy/systemd/rutracker-challenge-gate.service`, `deploy/nginx/rtcc.wildcar.org.conf`, `AGENTS/{ENV,STATE,HISTORY}.md`, `README.md`.
+- Next: —
+
+---
+
 ## 2026-08-13 · MCP owns Chromium: launch on demand, stop when idle
 - What: `launch_persistent_context` on the shared profile when `RUTRACKER_BROWSER_PROFILE` is set, closed after 5 min idle (30 min grace after an auth/challenge error); attach over CDP first so an operator's browser wins the profile lock. `rutracker-browser.service` demoted to a manual-login aid (no `[Install]`, `Restart=no`, disabled); MCP drop-in gains `DISPLAY`/profile/proxy env, `PrivateTmp=false` and the memory cap; MCP unit committed.
 - Why: The browser is only needed during a request — session + `cf_clearance` live in the profile — so an around-the-clock headful Chromium was the OOM risk and forced `Requires=` on a second unit.

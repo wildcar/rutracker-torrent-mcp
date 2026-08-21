@@ -84,7 +84,16 @@ The bot host exits through the loopback SOCKS tunnel to `keeper@212.192.223.34`
 (`deploy/systemd/rutracker-proxy.service`, `-D 127.0.0.1:1080`, key at
 `/var/lib/rutracker-proxy/id_ed25519`); the dedicated SSH key is restricted to
 port forwarding on that host.
-Forward it from an operator workstation:
+Two ways in:
+
+1. **Telegram button (primary).** On `cloudflare_challenge` / `manual_auth_required`
+   the bot mints a one-time token into `/var/lib/rutracker-challenge/token` and
+   sends admins a «Пройти проверку» button → `https://rtcc.wildcar.org/enter/<token>`.
+   nginx (`deploy/nginx/rtcc.wildcar.org.conf`) fronts loopback noVNC and asks
+   `rutracker-challenge-gate.service` (`deploy/challenge-gate.py`, 127.0.0.1:6079)
+   to validate the token/cookie via `auth_request`; everything unauthorized is a
+   404. Token TTL 1800 s = the MCP's manual-login grace window.
+2. **SSH fallback** from an operator workstation:
 
 ```bash
 ssh -L 6080:127.0.0.1:6080 keeper@208.92.227.90
@@ -92,4 +101,5 @@ ssh -L 6080:127.0.0.1:6080 keeper@208.92.227.90
 
 Open `http://127.0.0.1:6080/vnc.html?autoconnect=1&resize=scale`, complete the
 Cloudflare check, and log in to rutracker. MCP uses a separate tab in that same
-profile. No VNC/CDP port may be exposed publicly.
+profile. VNC 5901 / noVNC 6080 / CDP 9222 stay loopback-only — the only public
+face is the token-gated nginx vhost.

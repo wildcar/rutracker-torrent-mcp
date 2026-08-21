@@ -40,11 +40,15 @@ movie_handler bot, via authenticated HTML scraping.
 - `rutracker-browser.service` is memory-capped (`MemoryHigh=768M`, `MemoryMax=1G`);
   `ExecStartPre` wipes Chromium's session-restore state and the launcher no longer
   passes a startup URL.
+- Challenge solving is one tap from a phone: token-gated public noVNC at
+  `rtcc.wildcar.org` (`deploy/challenge-gate.py` + `deploy/nginx/` vhost +
+  `rutracker-challenge-gate.service`); the Telegram bot mints the links.
 
 ## Next
 
-- Monitor session lifetime; use noVNC when `manual_auth_required` (sign in) or
-  `cloudflare_challenge` (solve Turnstile) is returned.
+- Monitor session lifetime; solve challenges via the bot's «Пройти проверку»
+  button (or the SSH-tunnel fallback) when `manual_auth_required` /
+  `cloudflare_challenge` is returned.
 - (when needed) Additional trackers under `clients/` (noname-club, kinozal).
 
 ## Open questions
