@@ -15,6 +15,7 @@ from selectolax.parser import HTMLParser
 
 from .rutracker import (
     CloudflareChallenge,
+    LoginCaptchaRequired,
     ManualLoginRequired,
     RutrackerError,
     _parse_disposition_filename,
@@ -50,6 +51,11 @@ class PlaywrightRutrackerClient:
     instead and never shut down — it isn't ours to close, and the profile takes
     only one process at a time.
 
+    A logged-out session is re-authenticated in the browser itself when
+    credentials are configured — the form login costs one navigation and saves
+    the operator a VNC round trip. Only what the form cannot solve (a captcha,
+    rejected credentials, a Cloudflare challenge) still reaches a human.
+
     The CDP connection is always ``connect_over_cdp`` and therefore severable:
     on an auth/challenge error the client disconnects but leaves the process on
     the display for the manual-login grace window, because Turnstile fails in a
@@ -71,6 +77,8 @@ class PlaywrightRutrackerClient:
         browser_proxy: str | None = None,
         idle_timeout: float = 300.0,
         manual_login_grace: float = 1800.0,
+        login: str | None = None,
+        password: str | None = None,
         page: Any = None,
     ) -> None:
         self._base = base_url.rstrip("/")
@@ -88,6 +96,8 @@ class PlaywrightRutrackerClient:
         self._browser_proxy = browser_proxy
         self._idle_timeout = idle_timeout
         self._manual_login_grace = manual_login_grace
+        self._login = login
+        self._password = password
         self._playwright: Any = None
         self._browser: Any = None
         self._process: Any = None
@@ -340,28 +350,38 @@ class PlaywrightRutrackerClient:
         async with self._request_lock:
             try:
                 await self._navigate_html_locked("/forum/viewtopic.php", params={"t": topic_id})
-                page = await self._ensure_page()
-                url = self._url("/forum/dl.php", {"t": topic_id})
-                result = await page.evaluate(_FETCH_SCRIPT, {"url": url})
-                status = int(result["status"])
-                headers = {str(k).lower(): str(v) for k, v in result["headers"].items()}
-                if _is_cloudflare_challenge("", headers):
-                    raise CloudflareChallenge(_CHALLENGE_MESSAGE)
-                if status in {401, 403}:
-                    raise ManualLoginRequired(_MANUAL_LOGIN_MESSAGE)
-                if status >= 400:
-                    raise RutrackerError(f"rutracker /forum/dl.php → HTTP {status}")
-                content = base64.b64decode(result["body"])
-                ctype = headers.get("content-type", "").lower()
-                if "x-bittorrent" not in ctype and not content.startswith(b"d"):
-                    raise ManualLoginRequired(_MANUAL_LOGIN_MESSAGE)
-                filename = _parse_disposition_filename(headers.get("content-disposition", ""))
-                return filename or f"[rutracker.org].t{topic_id}.torrent", content
+                try:
+                    return await self._download_torrent_locked(topic_id)
+                except ManualLoginRequired:
+                    # dl.php can reject a session the topic page still accepted
+                    # (it is the one endpoint that insists on a fresh login).
+                    if not await self._auto_login():
+                        raise
+                    return await self._download_torrent_locked(topic_id)
             except (CloudflareChallenge, ManualLoginRequired):
                 await self._release_for_operator()
                 raise
             finally:
                 self._touch()
+
+    async def _download_torrent_locked(self, topic_id: int) -> tuple[str, bytes]:
+        page = await self._ensure_page()
+        url = self._url("/forum/dl.php", {"t": topic_id})
+        result = await page.evaluate(_FETCH_SCRIPT, {"url": url})
+        status = int(result["status"])
+        headers = {str(k).lower(): str(v) for k, v in result["headers"].items()}
+        if _is_cloudflare_challenge("", headers):
+            raise CloudflareChallenge(_CHALLENGE_MESSAGE)
+        if status in {401, 403}:
+            raise ManualLoginRequired(_MANUAL_LOGIN_MESSAGE)
+        if status >= 400:
+            raise RutrackerError(f"rutracker /forum/dl.php → HTTP {status}")
+        content = base64.b64decode(result["body"])
+        ctype = headers.get("content-type", "").lower()
+        if "x-bittorrent" not in ctype and not content.startswith(b"d"):
+            raise ManualLoginRequired(_MANUAL_LOGIN_MESSAGE)
+        filename = _parse_disposition_filename(headers.get("content-disposition", ""))
+        return filename or f"[rutracker.org].t{topic_id}.torrent", content
 
     async def magnet_link(self, topic_id: int) -> str | None:
         html = await self._navigate_html("/forum/viewtopic.php", params={"t": topic_id})
@@ -396,6 +416,7 @@ class PlaywrightRutrackerClient:
         path: str,
         *,
         params: dict[str, Any] | None = None,
+        allow_login: bool = True,
     ) -> str:
         page = await self._ensure_page()
         try:
@@ -416,10 +437,54 @@ class PlaywrightRutrackerClient:
         if _is_cloudflare_challenge(title, headers):
             raise CloudflareChallenge(_CHALLENGE_MESSAGE)
         if _requires_manual_login(status, html):
+            # One shot at the form, then hand over: a second failure means the
+            # form is not what stands in the way (captcha, bad credentials).
+            if allow_login and await self._auto_login():
+                return await self._navigate_html_locked(path, params=params, allow_login=False)
             raise ManualLoginRequired(_MANUAL_LOGIN_MESSAGE)
         if status >= 400:
             raise RutrackerError(f"rutracker {path} → HTTP {status}")
         return str(html)
+
+    async def _auto_login(self) -> bool:
+        """Sign in through ``/forum/login.php`` in the browser. Returns success.
+
+        False means "could not even try" — no credentials, no form on the page,
+        or a navigation that fell over; the caller then hands the browser to a
+        human. A captcha or a Cloudflare gate raises instead, because those name
+        the obstacle precisely and the tool layer maps them to their own codes.
+        """
+        if not self._login or not self._password:
+            return False
+        page = await self._ensure_page()
+        try:
+            await page.goto(
+                self._url("/forum/login.php"),
+                wait_until="domcontentloaded",
+                timeout=self._timeout_ms,
+            )
+            title = await page.title()
+            if _is_cloudflare_challenge(title, {}):
+                raise CloudflareChallenge(_CHALLENGE_MESSAGE)
+            if _looks_like_login_captcha(await page.content()):
+                raise LoginCaptchaRequired(_LOGIN_CAPTCHA_MESSAGE)
+            await page.fill(_LOGIN_USER_SELECTOR, self._login, timeout=self._timeout_ms)
+            await page.fill(_LOGIN_PASSWORD_SELECTOR, self._password, timeout=self._timeout_ms)
+            await page.click(_LOGIN_SUBMIT_SELECTOR, timeout=self._timeout_ms)
+            await page.wait_for_load_state("domcontentloaded", timeout=self._timeout_ms)
+            html = await page.content()
+            title = await page.title()
+        except (CloudflareChallenge, LoginCaptchaRequired):
+            raise
+        except Exception:
+            # A missing field, a redesigned form, a navigation timeout — all of
+            # them mean the same thing here: the operator takes over.
+            return False
+        if _is_cloudflare_challenge(title, {}):
+            raise CloudflareChallenge(_CHALLENGE_MESSAGE)
+        if _looks_like_login_captcha(html):
+            raise LoginCaptchaRequired(_LOGIN_CAPTCHA_MESSAGE)
+        return not _requires_manual_login(200, html)
 
     def _url(self, path: str, params: dict[str, Any] | None = None) -> str:
         url = self._base + path
@@ -427,6 +492,21 @@ class PlaywrightRutrackerClient:
 
 
 _CHALLENGE_TITLE = "just a moment..."
+
+_LOGIN_USER_SELECTOR = 'input[name="login_username"]'
+_LOGIN_PASSWORD_SELECTOR = 'input[name="login_password"]'
+_LOGIN_SUBMIT_SELECTOR = 'input[name="login"]'
+
+
+def _looks_like_login_captcha(html: str) -> bool:
+    """Stricter than the curl backend's check: the word "captcha" alone shows up
+    in rutracker's own markup, and a false positive here would send the operator
+    after a captcha that is not on the page."""
+    lowered = html.lower()
+    # The answer field is named per-session — «cap_code_<sid>» — so the prefix
+    # is what identifies it.
+    return "cap_sid" in lowered or 'name="cap_code' in lowered
+
 
 # Mirrors deploy/run-browser.sh: the same profile has to behave the same way
 # whether the operator starts Chromium or we launch it.
@@ -464,6 +544,10 @@ def _clear_session_restore(profile_dir: Path) -> None:
         except OSError:
             pass
 
+
+_LOGIN_CAPTCHA_MESSAGE = (
+    "rutracker asked for a captcha on login; sign in manually through the challenge link or noVNC"
+)
 
 _MANUAL_LOGIN_MESSAGE = (
     "rutracker browser session is logged out; open the Chromium display through "

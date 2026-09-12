@@ -4,6 +4,14 @@ Newest first. Each entry ≤5 lines using the format defined in `AGENTS.md`.
 
 ---
 
+## 2026-09-12 · Browser backend logs itself back in
+- What: `PlaywrightRutrackerClient` takes the configured credentials and fills `/forum/login.php` in the tab when a response carries the login form, then replays the request once; `dl.php` retries the same way. Captcha (`cap_sid` / `cap_code*`), a form that comes back, or a Cloudflare gate still hand over to the operator.
+- Why: only the curl backend could log in, so every expired `bb_session` under the playwright backend became a VNC trip to type a password the server already had.
+- Files: `src/rutracker_torrent_mcp/{clients/browser.py,context.py}`, `tests/test_browser.py`, `AGENTS/{STATE,HISTORY}.md`.
+- Next: —
+
+---
+
 ## 2026-08-21 · Detachable browser: spawn + connect_over_cdp
 - What: self-launched Chromium is now a plain subprocess on the CDP port (run-browser.sh command line) attached via `connect_over_cdp`; on challenge/auth errors the client disconnects, leaving a client-free browser on the display for the grace window; idle shutdown kills the subprocess.
 - Why: Turnstile loops while a CDP client is attached, and a `launch_persistent_context` browser dies with its client — the challenge link needed operator SSH to work.

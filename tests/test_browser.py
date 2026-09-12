@@ -17,6 +17,7 @@ from rutracker_torrent_mcp.clients.browser import (
 )
 from rutracker_torrent_mcp.clients.rutracker import (
     CloudflareChallenge,
+    LoginCaptchaRequired,
     ManualLoginRequired,
     RutrackerError,
 )
@@ -553,3 +554,106 @@ async def test_connect_is_lazy_and_recovers_on_a_later_call(
         await client.search("Dune")
 
     assert len(await client.search("Dune", limit=1)) == 1
+
+
+_LOGIN_FORM = '<html><form><input name="login_username"><input name="login_password"></form></html>'
+_CAPTCHA_FORM = (
+    '<html><form><input name="login_username"><input name="login_password">'
+    '<input name="cap_code_abc"></form></html>'
+)
+
+
+class LoginFakePage(FakePage):
+    """A page that serves the login form until the form is actually submitted."""
+
+    def __init__(self, *, after_login: str, login_page: str = _LOGIN_FORM, **kwargs: Any) -> None:
+        super().__init__(html=login_page, **kwargs)
+        self.after_login = after_login
+        self.filled: dict[str, str] = {}
+        self.submits = 0
+
+    async def fill(self, selector: str, value: str, **kwargs: Any) -> None:
+        self.filled[selector] = value
+
+    async def click(self, selector: str, **kwargs: Any) -> None:
+        self.submits += 1
+        self.html = self.after_login
+
+    async def wait_for_load_state(self, state: str, **kwargs: Any) -> None:
+        return None
+
+
+def _credentialled(page: FakePage) -> PlaywrightRutrackerClient:
+    return PlaywrightRutrackerClient(
+        base_url="https://rutracker.org",
+        cdp_url="http://unused",
+        login="user",
+        password="secret",
+        page=page,
+    )
+
+
+async def test_logged_out_session_signs_itself_back_in(search_html: str) -> None:
+    page = LoginFakePage(after_login=search_html)
+    client = _credentialled(page)
+
+    results = await client.search("Dune")
+
+    assert results
+    assert page.submits == 1
+    assert page.filled == {
+        'input[name="login_username"]': "user",
+        'input[name="login_password"]': "secret",
+    }
+    assert any("login.php" in url for url in page.urls)
+
+
+async def test_login_that_does_not_take_hands_over_to_the_operator() -> None:
+    # The form comes back after the submit — credentials rejected, or the
+    # session is refused for a reason the form cannot fix.
+    page = LoginFakePage(after_login=_LOGIN_FORM)
+    client = _credentialled(page)
+
+    with pytest.raises(ManualLoginRequired):
+        await client.search("Dune")
+    assert page.submits == 1  # exactly one attempt, then the human
+
+
+async def test_login_captcha_is_reported_as_such() -> None:
+    page = LoginFakePage(after_login=_LOGIN_FORM, login_page=_CAPTCHA_FORM)
+    client = _credentialled(page)
+
+    with pytest.raises(LoginCaptchaRequired):
+        await client.search("Dune")
+    assert page.submits == 0  # nothing to submit — the captcha is unsolvable here
+
+
+async def test_download_retries_once_behind_a_fresh_login() -> None:
+    torrent = b"d4:infod4:name4:testee"
+    page = LoginFakePage(after_login="<html><body>topic</body></html>")
+    page.html = "<html><body>topic</body></html>"  # the topic page itself is fine
+    page.fetch_result = {
+        "status": 403,
+        "headers": {"content-type": "text/html"},
+        "body": "",
+    }
+
+    async def _fetch_after_login(script: str, arg: dict[str, str]) -> dict[str, Any]:
+        if page.submits:
+            return {
+                "status": 200,
+                "headers": {
+                    "content-type": "application/x-bittorrent",
+                    "content-disposition": 'attachment; filename="test.torrent"',
+                },
+                "body": base64.b64encode(torrent).decode(),
+            }
+        return dict(page.fetch_result or {})
+
+    page.evaluate = _fetch_after_login  # type: ignore[method-assign]
+    client = _credentialled(page)
+
+    filename, content = await client.download_torrent(42)
+
+    assert (filename, content) == ("test.torrent", torrent)
+    assert page.submits == 1

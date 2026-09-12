@@ -48,6 +48,11 @@ movie_handler bot, via authenticated HTML scraping.
   `rtcc.wildcar.org` (`deploy/challenge-gate.py` + `deploy/nginx/` vhost +
   `rutracker-challenge-gate.service`); the Telegram bot mints the links, and the
   MCP hands over a client-free browser automatically — no operator SSH needed.
+- The browser backend signs itself back in: a page carrying the login form makes
+  it POST `/forum/login.php` with `RUTRACKER_LOGIN` / `RUTRACKER_PASSWORD` once
+  and replay the request (`dl.php` gets the same single retry). Only a captcha
+  (`captcha_required`), rejected credentials or a Cloudflare gate still reach a
+  human — `manual_auth_required` now means the form could not fix it.
 
 ## Next
 
