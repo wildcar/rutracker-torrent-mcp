@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode, urlparse
 
+import structlog
 from selectolax.parser import HTMLParser
 
 from .rutracker import (
@@ -22,6 +23,8 @@ from .rutracker import (
     _parse_search,
     _parse_topic,
 )
+
+log = structlog.get_logger(__name__)
 
 _FETCH_SCRIPT = """
 async ({url}) => {
@@ -468,23 +471,36 @@ class PlaywrightRutrackerClient:
                 raise CloudflareChallenge(_CHALLENGE_MESSAGE)
             if _looks_like_login_captcha(await page.content()):
                 raise LoginCaptchaRequired(_LOGIN_CAPTCHA_MESSAGE)
-            await page.fill(_LOGIN_USER_SELECTOR, self._login, timeout=self._timeout_ms)
-            await page.fill(_LOGIN_PASSWORD_SELECTOR, self._password, timeout=self._timeout_ms)
-            await page.click(_LOGIN_SUBMIT_SELECTOR, timeout=self._timeout_ms)
+            form = await _visible_login_form(page)
+            if form is None:
+                log.warning("browser.auto_login_no_form", url=getattr(page, "url", None))
+                return False
+            await form.locator(_LOGIN_USER_SELECTOR).first.fill(
+                self._login, timeout=self._timeout_ms
+            )
+            await form.locator(_LOGIN_PASSWORD_SELECTOR).first.fill(
+                self._password, timeout=self._timeout_ms
+            )
+            await form.locator(_LOGIN_SUBMIT_SELECTOR).first.click(timeout=self._timeout_ms)
             await page.wait_for_load_state("domcontentloaded", timeout=self._timeout_ms)
             html = await page.content()
             title = await page.title()
         except (CloudflareChallenge, LoginCaptchaRequired):
             raise
-        except Exception:
-            # A missing field, a redesigned form, a navigation timeout — all of
-            # them mean the same thing here: the operator takes over.
+        except Exception as exc:
+            # A redesigned form, a navigation timeout, a field we cannot reach —
+            # all of them mean the same thing here: the operator takes over. It
+            # is logged because from the outside it is indistinguishable from a
+            # session that was never going to be fixable.
+            log.warning("browser.auto_login_failed", error=str(exc))
             return False
         if _is_cloudflare_challenge(title, {}):
             raise CloudflareChallenge(_CHALLENGE_MESSAGE)
         if _looks_like_login_captcha(html):
             raise LoginCaptchaRequired(_LOGIN_CAPTCHA_MESSAGE)
-        return not _requires_manual_login(200, html)
+        signed_in = not _requires_manual_login(200, html)
+        log.info("browser.auto_login", signed_in=signed_in)
+        return signed_in
 
     def _url(self, path: str, params: dict[str, Any] | None = None) -> str:
         url = self._base + path
@@ -496,6 +512,24 @@ _CHALLENGE_TITLE = "just a moment..."
 _LOGIN_USER_SELECTOR = 'input[name="login_username"]'
 _LOGIN_PASSWORD_SELECTOR = 'input[name="login_password"]'
 _LOGIN_SUBMIT_SELECTOR = 'input[name="login"]'
+# rutracker renders the credentials twice — the top-bar quick login and the
+# page's own form — so every bare selector matches two elements and Playwright
+# refuses to act on an ambiguous match. Scope to one form, and to the one a
+# human would actually use: the visible one.
+_LOGIN_FORM_SELECTOR = 'form:has(input[name="login_username"]):has(input[name="login_password"])'
+
+
+async def _visible_login_form(page: Any) -> Any:
+    """The visible login form on the page, or None when there is none."""
+    forms = page.locator(_LOGIN_FORM_SELECTOR)
+    for index in range(await forms.count()):
+        form = forms.nth(index)
+        try:
+            if await form.locator(_LOGIN_USER_SELECTOR).first.is_visible():
+                return form
+        except Exception:
+            continue
+    return None
 
 
 def _looks_like_login_captcha(html: str) -> bool:

@@ -563,21 +563,64 @@ _CAPTCHA_FORM = (
 )
 
 
+class FakeLocator:
+    """Enough of the Playwright locator API for the login form.
+
+    ``forms`` is how many login forms the page renders — rutracker renders two
+    (top-bar + page form), the ambiguity that strict-mode selectors trip over —
+    and only the last one is visible, so the client has to pick it.
+    """
+
+    def __init__(self, page: LoginFakePage, selector: str, *, index: int | None = None) -> None:
+        self._page = page
+        self._selector = selector
+        self._index = index
+
+    def locator(self, selector: str) -> FakeLocator:
+        return FakeLocator(self._page, selector, index=self._index)
+
+    @property
+    def first(self) -> FakeLocator:
+        return FakeLocator(self._page, self._selector, index=self._index or 0)
+
+    def nth(self, index: int) -> FakeLocator:
+        return FakeLocator(self._page, self._selector, index=index)
+
+    async def count(self) -> int:
+        return self._page.forms if "form:has" in self._selector else 1
+
+    async def is_visible(self) -> bool:
+        return self._index == self._page.forms - 1
+
+    async def fill(self, value: str, **kwargs: Any) -> None:
+        assert self._index is not None, "a bare selector would be ambiguous"
+        self._page.filled[self._selector] = value
+
+    async def click(self, **kwargs: Any) -> None:
+        assert self._index is not None, "a bare selector would be ambiguous"
+        self._page.submits += 1
+        self._page.html = self._page.after_login
+
+
 class LoginFakePage(FakePage):
     """A page that serves the login form until the form is actually submitted."""
 
-    def __init__(self, *, after_login: str, login_page: str = _LOGIN_FORM, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        *,
+        after_login: str,
+        login_page: str = _LOGIN_FORM,
+        forms: int = 2,
+        **kwargs: Any,
+    ) -> None:
         super().__init__(html=login_page, **kwargs)
         self.after_login = after_login
+        self.forms = forms
         self.filled: dict[str, str] = {}
         self.submits = 0
 
-    async def fill(self, selector: str, value: str, **kwargs: Any) -> None:
-        self.filled[selector] = value
-
-    async def click(self, selector: str, **kwargs: Any) -> None:
-        self.submits += 1
-        self.html = self.after_login
+    def locator(self, selector: str) -> FakeLocator:
+        return FakeLocator(self, selector)
 
     async def wait_for_load_state(self, state: str, **kwargs: Any) -> None:
         return None
@@ -617,6 +660,16 @@ async def test_login_that_does_not_take_hands_over_to_the_operator() -> None:
     with pytest.raises(ManualLoginRequired):
         await client.search("Dune")
     assert page.submits == 1  # exactly one attempt, then the human
+
+
+async def test_no_reachable_login_form_hands_over() -> None:
+    # Every form hidden — nothing a human could type into either.
+    page = LoginFakePage(after_login=_LOGIN_FORM, forms=0)
+    client = _credentialled(page)
+
+    with pytest.raises(ManualLoginRequired):
+        await client.search("Dune")
+    assert page.submits == 0
 
 
 async def test_login_captcha_is_reported_as_such() -> None:

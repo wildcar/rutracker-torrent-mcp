@@ -4,6 +4,14 @@ Newest first. Each entry ≤5 lines using the format defined in `AGENTS.md`.
 
 ---
 
+## 2026-09-12 · Auto-login had to pick a form
+- What: the login fill is scoped to the *visible* `form:has(input[name=login_username])` (`.first` within it) instead of a bare page-level selector, and every give-up path now logs (`browser.auto_login*`).
+- Why: rutracker renders the credentials twice (top-bar + page form), so the bare selector matched two elements, Playwright's strict mode refused, and the silent `return False` looked exactly like a session nothing could fix. Live-verified: signs in and searches.
+- Files: `src/rutracker_torrent_mcp/clients/browser.py`, `tests/test_browser.py`, `AGENTS/{STATE,HISTORY}.md`.
+- Next: —
+
+---
+
 ## 2026-09-12 · Browser backend logs itself back in
 - What: `PlaywrightRutrackerClient` takes the configured credentials and fills `/forum/login.php` in the tab when a response carries the login form, then replays the request once; `dl.php` retries the same way. Captcha (`cap_sid` / `cap_code*`), a form that comes back, or a Cloudflare gate still hand over to the operator.
 - Why: only the curl backend could log in, so every expired `bb_session` under the playwright backend became a VNC trip to type a password the server already had.

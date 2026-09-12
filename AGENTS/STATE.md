@@ -52,7 +52,9 @@ movie_handler bot, via authenticated HTML scraping.
   it POST `/forum/login.php` with `RUTRACKER_LOGIN` / `RUTRACKER_PASSWORD` once
   and replay the request (`dl.php` gets the same single retry). Only a captcha
   (`captcha_required`), rejected credentials or a Cloudflare gate still reach a
-  human — `manual_auth_required` now means the form could not fix it.
+  human — `manual_auth_required` now means the form could not fix it. The fill
+  targets the visible login form: rutracker renders the credentials twice, and a
+  page-level selector matches both, which Playwright's strict mode rejects.
 
 ## Next
 
