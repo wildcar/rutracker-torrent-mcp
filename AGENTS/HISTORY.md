@@ -4,6 +4,14 @@ Newest first. Each entry ≤5 lines using the format defined in `AGENTS.md`.
 
 ---
 
+## 2026-09-29 · Proxy flapping no longer restarts the MCP
+- What: host drop-in `proxy.conf` now `Wants=` (was `Requires=`) `rutracker-proxy.service`; re-pinned the proxy host key after the remote server was reinstalled.
+- Why: proxy failed host-key check ~15k times; `Requires=` restarted the MCP every ~5s, so bot searches hit reconnects / 60s timeouts.
+- Files: `AGENTS/{ENV,HISTORY}.md` (drop-in itself lives on the host).
+- Next: add the proxy's public key to `keeper@212.192.223.34` `authorized_keys` (currently Permission denied).
+
+---
+
 ## 2026-09-12 · Auto-login had to pick a form
 - What: the login fill is scoped to the *visible* `form:has(input[name=login_username])` (`.first` within it) instead of a bare page-level selector, and every give-up path now logs (`browser.auto_login*`).
 - Why: rutracker renders the credentials twice (top-bar + page form), so the bare selector matched two elements, Playwright's strict mode refused, and the silent `return False` looked exactly like a session nothing could fix. Live-verified: signs in and searches.

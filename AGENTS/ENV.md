@@ -87,7 +87,10 @@ account plus `NoNewPrivileges`, `ProtectSystem=strict`, and narrow writable path
 The bot host exits through the loopback SOCKS tunnel to `keeper@212.192.223.34`
 (`deploy/systemd/rutracker-proxy.service`, `-D 127.0.0.1:1080`, key at
 `/var/lib/rutracker-proxy/id_ed25519`); the dedicated SSH key is restricted to
-port forwarding on that host.
+port forwarding on that host. Host drop-in `rutracker-torrent-mcp.service.d/proxy.conf` uses
+`Wants=` + `After=` (not `Requires=`): a failing tunnel (e.g. changed host key after a
+reinstall → `known_hosts` must be re-pinned, and the `.pub` re-added to the remote
+`authorized_keys`) must not restart the MCP in a loop.
 Two ways in:
 
 1. **Telegram button (primary).** On `cloudflare_challenge` / `manual_auth_required`
