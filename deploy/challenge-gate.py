@@ -70,15 +70,16 @@ class Handler(BaseHTTPRequestHandler):
     def _enter(self, presented: str) -> None:
         token = current_token()
         ok = token is not None and hmac.compare_digest(presented, token)
-        print(f"enter: {'accepted' if ok else 'rejected'} from {self.client_address[0]}", flush=True)
+        print(
+            f"enter: {'accepted' if ok else 'rejected'} from {self.client_address[0]}", flush=True
+        )
         if not ok or token is None:
             self._deny(404)
             return
         self.send_response(302)
         self.send_header(
             "Set-Cookie",
-            f"{COOKIE_NAME}={token}; Path=/; Max-Age={TTL_SECONDS}; "
-            "HttpOnly; Secure; SameSite=Lax",
+            f"{COOKIE_NAME}={token}; Path=/; Max-Age={TTL_SECONDS}; HttpOnly; Secure; SameSite=Lax",
         )
         self.send_header("Location", NOVNC_URL)
         self.end_headers()
