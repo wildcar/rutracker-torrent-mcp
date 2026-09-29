@@ -8,7 +8,8 @@ Newest first. Each entry ≤5 lines using the format defined in `AGENTS.md`.
 - What: host drop-in `proxy.conf` now `Wants=` (was `Requires=`) `rutracker-proxy.service`; re-pinned the proxy host key after the remote server was reinstalled.
 - Why: proxy failed host-key check ~15k times; `Requires=` restarted the MCP every ~5s, so bot searches hit reconnects / 60s timeouts.
 - Files: `AGENTS/{ENV,HISTORY}.md` (drop-in itself lives on the host).
-- Next: add the proxy's public key to `keeper@212.192.223.34` `authorized_keys` (currently Permission denied).
+- Next: —
+- Update: the proxy server moved to `45.131.185.170` (wildcar.org); unit, known_hosts and docs updated, tunnel + rutracker verified (HTTP 200).
 
 ---
 

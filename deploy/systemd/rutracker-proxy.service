@@ -16,7 +16,7 @@ ExecStart=/usr/bin/ssh -NT -D 127.0.0.1:1080 \
     -o ServerAliveCountMax=3 \
     -o StrictHostKeyChecking=yes \
     -o UserKnownHostsFile=/var/lib/rutracker-proxy/known_hosts \
-    keeper@212.192.223.34
+    keeper@45.131.185.170
 Restart=always
 RestartSec=5
 NoNewPrivileges=true

@@ -26,7 +26,7 @@ movie_handler bot, via authenticated HTML scraping.
   the persistent profile is authenticated. Verified 2026-08-13: exactly one tab
   before and after a browser restart, search + `.torrent` live through the MCP,
   and the MCP survives a browser restart without being restarted itself.
-- SOCKS5 egress through `212.192.223.34` is active on the bot host; its unit is
+- SOCKS5 egress through `45.131.185.170` is active on the bot host; its unit is
   committed as `deploy/systemd/rutracker-proxy.service`.
 - All four tools are live-verified through the browser backend; `.torrent` download
   returned a valid 47,779-byte file.
